@@ -20,12 +20,14 @@ DEFAULT_STD = [0.229, 0.224, 0.225]
 def load_vision_dataset(config: DataConfig) -> DatasetDict:
     """Load vision dataset from HuggingFace Hub or local files."""
     if config.dataset_name:
+        logger.info(f"Loading dataset: {config.dataset_name}")
         dataset = load_dataset(
             config.dataset_name,
             config.dataset_config_name,
             streaming=config.streaming,
         )
     elif config.train_file:
+        logger.info(f"Loading dataset from folder: {config.train_file}")
         data_files = {"train": config.train_file}
         if config.validation_file:
             data_files["validation"] = config.validation_file
@@ -34,6 +36,7 @@ def load_vision_dataset(config: DataConfig) -> DatasetDict:
     else:
         raise ValueError("Either dataset_name or train_file must be provided")
 
+    logger.info(f"Dataset splits: {list(dataset.keys())}")
     return dataset
 
 

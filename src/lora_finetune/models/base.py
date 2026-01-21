@@ -54,6 +54,7 @@ def get_torch_dtype(dtype_str: str) -> torch.dtype:
 def get_quantization_config(config: ModelConfig) -> Optional[BitsAndBytesConfig]:
     """Get quantization config if needed."""
     if config.load_in_4bit:
+        logger.info("Using 4-bit quantization")
         compute_dtype = get_torch_dtype(config.bnb_4bit_compute_dtype)
         return BitsAndBytesConfig(
             load_in_4bit=True,
@@ -62,6 +63,7 @@ def get_quantization_config(config: ModelConfig) -> Optional[BitsAndBytesConfig]
             bnb_4bit_use_double_quant=config.bnb_4bit_use_double_quant,
         )
     elif config.load_in_8bit:
+        logger.info("Using 8-bit quantization")
         return BitsAndBytesConfig(load_in_8bit=True)
     return None
 
@@ -101,12 +103,14 @@ def load_model_and_tokenizer(
     )
 
     if config.model_type == "vision":
+        logger.info("Loading image processor")
         processor = AutoImageProcessor.from_pretrained(
             config.model_name_or_path,
             trust_remote_code=config.trust_remote_code,
         )
         return model, processor
     else:
+        logger.info("Loading tokenizer")
         tokenizer = AutoTokenizer.from_pretrained(
             config.model_name_or_path,
             trust_remote_code=config.trust_remote_code,
@@ -115,6 +119,7 @@ def load_model_and_tokenizer(
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
             tokenizer.pad_token_id = tokenizer.eos_token_id
+            logger.info("Set pad_token to eos_token")
 
         return model, tokenizer
 
@@ -127,6 +132,7 @@ def get_peft_model_with_lora(
 ) -> PreTrainedModel:
     """Apply LoRA to model using PEFT."""
     if is_quantized:
+        logger.info("Preparing quantized model for k-bit training")
         model = prepare_model_for_kbit_training(
             model,
             use_gradient_checkpointing=True,

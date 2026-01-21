@@ -164,6 +164,9 @@ def parse_args() -> argparse.Namespace:
 
     # Config file argument
     parser.add_argument("--config", type=str, help="Path to YAML config file")
+    parser.add_argument(
+        "--verbose", "-v", action="store_true", help="Enable verbose (INFO) logging for debugging"
+    )
 
     # Add arguments from all config dataclasses
     # LoRA config with "lora_" prefix for r, alpha, dropout to avoid conflicts

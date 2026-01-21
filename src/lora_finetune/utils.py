@@ -4,12 +4,57 @@ import logging
 import os
 import random
 import sys
+import warnings
 
 import numpy as np
 import torch
+from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
+
+console = Console()
 
 
-def setup_logging(level: str = "INFO") -> logging.Logger:
+class RichWarningHandler(logging.Handler):
+    """Custom logging handler that formats warnings elegantly with Rich."""
+
+    def emit(self, record):
+        msg = record.getMessage()
+
+        # Simplify common verbose warnings
+        if "not initialized from the model checkpoint" in msg:
+            msg = "Some model weights were randomly initialized (expected for fine-tuning)"
+        elif "Fast image processor" in msg or "slow image processor" in msg:
+            msg = "Using standard image processor (fast processor available with use_fast=True)"
+        elif "You should probably TRAIN" in msg:
+            return  # Skip this one, it's obvious
+        elif not msg.strip():
+            return
+
+        console.print(f"  [dim yellow]⚠ {msg}[/dim yellow]")
+
+
+def suppress_warnings() -> None:
+    """Configure warnings to be captured for elegant display."""
+    # Suppress tokenizer parallelism warning
+    os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
+    # Replace transformers logger handlers with our Rich handler
+    transformers_logger = logging.getLogger("transformers")
+    transformers_logger.handlers = [RichWarningHandler()]
+    transformers_logger.setLevel(logging.WARNING)
+
+    # Also handle Python warnings module
+    def _rich_showwarning(message, category, filename, lineno, file=None, line=None):
+        msg = str(message)
+        if "not initialized" in msg or "You should probably TRAIN" in msg:
+            return
+        console.print(f"  [dim yellow]⚠ {msg}[/dim yellow]")
+
+    warnings.showwarning = _rich_showwarning
+
+
+def setup_logging(level: str = "WARNING") -> logging.Logger:
     """Setup logging configuration."""
     logging.basicConfig(
         format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
@@ -17,6 +62,12 @@ def setup_logging(level: str = "INFO") -> logging.Logger:
         handlers=[logging.StreamHandler(sys.stdout)],
         level=getattr(logging, level.upper()),
     )
+
+    # Suppress verbose transformers/datasets logs
+    logging.getLogger("transformers").setLevel(logging.WARNING)
+    logging.getLogger("datasets").setLevel(logging.WARNING)
+    logging.getLogger("accelerate").setLevel(logging.WARNING)
+
     logger = logging.getLogger(__name__)
     return logger
 
@@ -61,12 +112,25 @@ def get_gpu_memory_usage() -> dict:
 def print_gpu_memory_usage() -> None:
     """Print GPU memory usage."""
     stats = get_gpu_memory_usage()
+    if not stats:
+        return
+
+    table = Table(title="GPU Memory", show_header=True, header_style="bold cyan")
+    table.add_column("GPU", style="dim")
+    table.add_column("Allocated", justify="right")
+    table.add_column("Reserved", justify="right")
+    table.add_column("Free", justify="right", style="green")
+    table.add_column("Total", justify="right")
+
     for gpu, info in stats.items():
-        print(
-            f"{gpu}: {info['allocated_gb']:.2f}GB allocated, "
-            f"{info['reserved_gb']:.2f}GB reserved, "
-            f"{info['free_gb']:.2f}GB free / {info['total_gb']:.2f}GB total"
+        table.add_row(
+            gpu,
+            f"{info['allocated_gb']:.2f} GB",
+            f"{info['reserved_gb']:.2f} GB",
+            f"{info['free_gb']:.2f} GB",
+            f"{info['total_gb']:.2f} GB",
         )
+    console.print(table)
 
 
 def check_flash_attention_available() -> bool:
@@ -101,10 +165,17 @@ def get_model_size(model: torch.nn.Module) -> dict:
 def print_model_size(model: torch.nn.Module) -> None:
     """Print model size statistics."""
     stats = get_model_size(model)
-    print(f"Total parameters: {stats['total_params']:,}")
-    print(f"Trainable parameters: {stats['trainable_params']:,}")
-    print(f"Trainable %: {stats['trainable_percent']:.4f}%")
-    print(f"Model size: {stats['param_size_mb']:.2f} MB")
+
+    table = Table(title="Model Statistics", show_header=False, box=None)
+    table.add_column("Metric", style="bold")
+    table.add_column("Value", justify="right", style="cyan")
+
+    table.add_row("Total parameters", f"{stats['total_params']:,}")
+    table.add_row("Trainable parameters", f"{stats['trainable_params']:,}")
+    table.add_row("Trainable %", f"{stats['trainable_percent']:.2f}%")
+    table.add_row("Model size", f"{stats['param_size_mb']:.2f} MB")
+
+    console.print(Panel(table, border_style="blue"))
 
 
 def count_parameters(model: torch.nn.Module) -> tuple:

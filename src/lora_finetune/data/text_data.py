@@ -1,5 +1,6 @@
 """Text dataset utilities for LLM finetuning."""
 
+import logging
 from functools import partial
 from typing import Any, Dict
 
@@ -7,6 +8,8 @@ from datasets import DatasetDict, load_dataset
 from transformers import DataCollatorForLanguageModeling, PreTrainedTokenizer
 
 from ..config import DataConfig
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_PROMPT_TEMPLATE = """### Instruction:
 {instruction}
@@ -28,12 +31,14 @@ CHAT_TEMPLATE = """<|begin_of_text|><|start_header_id|>user<|end_header_id|>
 def load_text_dataset(config: DataConfig) -> DatasetDict:
     """Load text dataset from HuggingFace Hub or local files."""
     if config.dataset_name:
+        logger.info(f"Loading dataset: {config.dataset_name}")
         dataset = load_dataset(
             config.dataset_name,
             config.dataset_config_name,
             streaming=config.streaming,
         )
     elif config.train_file:
+        logger.info(f"Loading dataset from file: {config.train_file}")
         data_files = {"train": config.train_file}
         if config.validation_file:
             data_files["validation"] = config.validation_file
@@ -88,9 +93,11 @@ def preprocess_text_dataset(
     config: DataConfig,
 ) -> DatasetDict:
     """Preprocess text dataset for training."""
+    logger.info(f"Preprocessing dataset with max_seq_length={config.max_seq_length}")
     template = config.prompt_template or DEFAULT_PROMPT_TEMPLATE
 
     if "instruction" in dataset[config.train_split].column_names:
+        logger.info("Using instruction template formatting")
         dataset = dataset.map(
             partial(format_instruction, template=template),
             remove_columns=[
