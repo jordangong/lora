@@ -206,8 +206,8 @@ class LoraTrainer(Trainer):
         else:
             super().save_model(output_dir, _internal_call=_internal_call)
 
-        if self.tokenizer is not None:
-            self.tokenizer.save_pretrained(output_dir)
+        if self.processing_class is not None:
+            self.processing_class.save_pretrained(output_dir)
 
 
 def create_trainer(

@@ -82,9 +82,8 @@ training:
   metric_for_best_model: eval_loss
   bf16: false
   fp16: true
-  tf32: true
   gradient_checkpointing: true
-  optim: adamw_torch
+  optim: adamw_torch_fused
   seed: 42
   dataloader_num_workers: 4
   report_to: wandb

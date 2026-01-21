@@ -278,7 +278,7 @@ class TrainingConfig:
     )
     bf16: bool = field(default=True, metadata={"help": "Use bfloat16 mixed precision"})
     fp16: bool = field(default=False, metadata={"help": "Use float16 mixed precision"})
-    tf32: bool = field(default=True, metadata={"help": "Enable TF32 on Ampere GPUs"})
+    tf32: Optional[bool] = field(default=None, metadata={"help": "Enable TF32 on Ampere GPUs"})
     gradient_checkpointing: bool = field(
         default=True, metadata={"help": "Enable gradient checkpointing to save memory"}
     )
@@ -286,7 +286,7 @@ class TrainingConfig:
         default=None, metadata={"help": "Kwargs for gradient checkpointing"}
     )
     optim: str = field(
-        default="adamw_torch", metadata={"help": "Optimizer: adamw_torch, adamw_hf, sgd, etc."}
+        default="adamw_torch_fused", metadata={"help": "Optimizer: adamw_torch_fused, adamw_torch, sgd, etc."}
     )
     seed: int = field(default=42, metadata={"help": "Random seed for reproducibility"})
     data_seed: int = field(default=42, metadata={"help": "Random seed for data sampling"})

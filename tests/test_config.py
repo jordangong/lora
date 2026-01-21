@@ -175,7 +175,7 @@ class TestTrainingConfig:
         assert config.learning_rate == 2e-4
         assert config.bf16 is True
         assert config.gradient_checkpointing is True
-        assert config.optim == "adamw_torch"
+        assert config.optim == "adamw_torch_fused"
 
     def test_custom_values(self):
         """Test custom training configuration values."""

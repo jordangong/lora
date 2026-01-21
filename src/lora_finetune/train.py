@@ -96,12 +96,15 @@ def _add_dataclass_args(
 
         # Handle boolean fields - add both --flag and --no_flag (no_ hidden from help)
         if field_type is bool:
-            default_state = "enabled" if default_val else "disabled"
-            bool_help = (
-                f"{help_text} (default: {default_state})"
-                if help_text
-                else f"(default: {default_state})"
-            )
+            if default_val is None:
+                bool_help = help_text if help_text else ""
+            else:
+                default_state = "enabled" if default_val else "disabled"
+                bool_help = (
+                    f"{help_text} (default: {default_state})"
+                    if help_text
+                    else f"(default: {default_state})"
+                )
             parser.add_argument(arg_name, action="store_true", default=None, help=bool_help)
             no_arg_name = f"--no_{prefix}{field_name}" if prefix else f"--no_{field_name}"
             parser.add_argument(

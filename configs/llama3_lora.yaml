@@ -47,9 +47,8 @@ training:
   save_total_limit: 3
   bf16: true
   fp16: false
-  tf32: true
   gradient_checkpointing: true
-  optim: adamw_torch
+  optim: adamw_torch_fused
   seed: 42
   dataloader_num_workers: 4
   report_to: wandb

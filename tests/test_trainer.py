@@ -219,9 +219,9 @@ class TestTrainingConfigDefaults:
     """Tests for TrainingConfig default values."""
 
     def test_default_optimizer(self):
-        """Test default optimizer is adamw_torch."""
+        """Test default optimizer is adamw_torch_fused."""
         config = TrainingConfig()
-        assert config.optim == "adamw_torch"
+        assert config.optim == "adamw_torch_fused"
 
     def test_default_scheduler(self):
         """Test default scheduler is cosine."""
