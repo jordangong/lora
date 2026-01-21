@@ -233,7 +233,7 @@ class TestTrainingConfigDefaults:
         config = TrainingConfig()
         assert config.bf16 is True
         assert config.fp16 is False
-        assert config.tf32 is True
+        assert config.tf32 is None
 
     def test_default_evaluation_settings(self):
         """Test default evaluation settings."""

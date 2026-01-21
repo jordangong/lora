@@ -21,7 +21,12 @@ from .data.vision_data import get_vision_collator, load_vision_dataset, preproce
 from .models.base import get_peft_model_with_lora, load_model_and_tokenizer
 from .models.llm import get_llm_target_modules
 from .models.vision import get_num_labels_from_dataset, get_vision_target_modules
-from .trainer import create_trainer, prepare_model_for_training
+from .trainer import (
+    compute_metrics_for_classification,
+    compute_metrics_for_lm,
+    create_trainer,
+    prepare_model_for_training,
+)
 from .utils import print_gpu_memory_usage, print_model_size, set_seed, setup_logging
 
 logger = logging.getLogger(__name__)
@@ -297,6 +302,9 @@ def train_llm(config: Config) -> None:
 
     data_collator = get_text_collator(tokenizer)
 
+    # Use perplexity metric for LLM evaluation if eval dataset exists
+    compute_metrics = compute_metrics_for_lm if eval_dataset is not None else None
+
     trainer = create_trainer(
         model=model,
         training_config=config.training,
@@ -305,6 +313,7 @@ def train_llm(config: Config) -> None:
         eval_dataset=eval_dataset,
         processing_class=tokenizer,
         data_collator=data_collator,
+        compute_metrics=compute_metrics,
     )
 
     logger.info("Starting training")
@@ -372,6 +381,9 @@ def train_vision(config: Config) -> None:
 
     data_collator = get_vision_collator()
 
+    # Use accuracy metric for vision classification
+    compute_metrics = compute_metrics_for_classification if eval_dataset is not None else None
+
     trainer = create_trainer(
         model=model,
         training_config=config.training,
@@ -380,6 +392,7 @@ def train_vision(config: Config) -> None:
         eval_dataset=eval_dataset,
         processing_class=None,
         data_collator=data_collator,
+        compute_metrics=compute_metrics,
     )
 
     logger.info("Starting training")

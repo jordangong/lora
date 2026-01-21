@@ -2,11 +2,13 @@
 
 import logging
 import os
-from typing import List, Optional, Union
+from typing import Callable, Dict, List, Optional, Union
 
+import numpy as np
 from peft import PeftModel
 from transformers import (
     DataCollator,
+    EvalPrediction,
     PreTrainedModel,
     Trainer,
     TrainingArguments,
@@ -178,6 +180,7 @@ class LoraTrainer(Trainer):
         processing_class=None,
         data_collator: Optional[DataCollator] = None,
         callbacks: Optional[List[TrainerCallback]] = None,
+        compute_metrics: Optional[Callable[[EvalPrediction], Dict]] = None,
         **kwargs,
     ):
         super().__init__(
@@ -188,6 +191,7 @@ class LoraTrainer(Trainer):
             processing_class=processing_class,
             data_collator=data_collator,
             callbacks=callbacks,
+            compute_metrics=compute_metrics,
             **kwargs,
         )
 
@@ -210,6 +214,52 @@ class LoraTrainer(Trainer):
             self.processing_class.save_pretrained(output_dir)
 
 
+def compute_metrics_for_classification(eval_pred: EvalPrediction) -> Dict[str, float]:
+    """Compute accuracy metrics for classification tasks."""
+    logits, labels = eval_pred
+    predictions = np.argmax(logits, axis=-1)
+    accuracy = (predictions == labels).mean()
+    return {"accuracy": accuracy}
+
+
+def compute_metrics_for_lm(eval_pred: EvalPrediction) -> Dict[str, float]:
+    """Compute perplexity for language modeling tasks."""
+    # For causal LM, predictions are logits and labels are token ids
+    # The loss is already computed by the model, so we compute perplexity from it
+    # Note: This requires the trainer to have computed loss already
+    logits, labels = eval_pred
+
+    # Compute cross entropy loss manually
+    # Shift logits and labels for causal LM
+    shift_logits = logits[..., :-1, :]
+    shift_labels = labels[..., 1:]
+
+    # Flatten
+    shift_logits = shift_logits.reshape(-1, shift_logits.shape[-1])
+    shift_labels = shift_labels.reshape(-1)
+
+    # Filter out padding tokens (typically -100)
+    mask = shift_labels != -100
+    if mask.sum() == 0:
+        return {"perplexity": float("inf")}
+
+    # Compute softmax and log probabilities
+    max_logits = np.max(shift_logits, axis=-1, keepdims=True)
+    exp_logits = np.exp(shift_logits - max_logits)
+    softmax = exp_logits / np.sum(exp_logits, axis=-1, keepdims=True)
+
+    # Get probabilities for correct tokens
+    valid_labels = np.where(mask, shift_labels, 0).astype(np.int64)
+    probs = softmax[np.arange(len(valid_labels)), valid_labels]
+
+    # Compute cross entropy only for valid tokens
+    log_probs = np.log(probs + 1e-10)
+    loss = -np.sum(log_probs * mask) / mask.sum()
+
+    perplexity = np.exp(loss)
+    return {"perplexity": float(perplexity)}
+
+
 def create_trainer(
     model: Union[PreTrainedModel, PeftModel],
     training_config: TrainingConfig,
@@ -218,6 +268,7 @@ def create_trainer(
     eval_dataset=None,
     processing_class=None,
     data_collator: Optional[DataCollator] = None,
+    compute_metrics: Optional[Callable[[EvalPrediction], Dict]] = None,
 ) -> LoraTrainer:
     """Create trainer with all optimizations configured."""
     setup_wandb(training_config)
@@ -236,6 +287,7 @@ def create_trainer(
         processing_class=processing_class,
         data_collator=data_collator,
         callbacks=callbacks,
+        compute_metrics=compute_metrics,
     )
 
     return trainer
