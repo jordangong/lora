@@ -52,7 +52,7 @@ checkpoints/
 wandb/
 
 # Data
-data/
+/data/
 *.pt
 *.bin
 *.safetensors
