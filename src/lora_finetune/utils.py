@@ -107,6 +107,15 @@ def print_model_size(model: torch.nn.Module) -> None:
     print(f"Model size: {stats['param_size_mb']:.2f} MB")
 
 
+def count_parameters(model: torch.nn.Module) -> tuple:
+    """Count total and trainable parameters.
+
+    Convenience wrapper around get_model_size for simple parameter counting.
+    """
+    stats = get_model_size(model)
+    return stats["total_params"], stats["trainable_params"]
+
+
 def ensure_dir(path: str) -> str:
     """Ensure directory exists."""
     os.makedirs(path, exist_ok=True)
@@ -134,10 +143,3 @@ def find_all_linear_names(model: torch.nn.Module) -> list:
         lora_module_names.remove("lm_head")
 
     return list(lora_module_names)
-
-
-def count_parameters(model: torch.nn.Module) -> tuple:
-    """Count total and trainable parameters."""
-    total = sum(p.numel() for p in model.parameters())
-    trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    return total, trainable
