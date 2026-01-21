@@ -36,6 +36,24 @@ uv sync --extra flash --extra bnb --extra dev
 uv sync --all-extras
 ```
 
+### CUDA Version Selection
+
+By default, PyTorch is installed with CUDA 12.6. To use a different CUDA version, edit `pyproject.toml`:
+
+```toml
+[tool.uv.sources]
+torch = { index = "pytorch-cu128" }      # Change to desired version
+torchvision = { index = "pytorch-cu128" }
+```
+
+Available options: `pytorch-cu126`, `pytorch-cu128`, `pytorch-cu130`
+
+Then re-sync:
+
+```bash
+uv sync --upgrade-package torch --upgrade-package torchvision
+```
+
 ## Quick Start
 
 ### Finetune Llama3 on text data
