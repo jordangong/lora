@@ -122,7 +122,7 @@ def get_training_arguments(
         remove_unused_columns=config.remove_unused_columns,
         report_to=config.report_to if config.report_to else "none",
         run_name=config.run_name or config.wandb_run_name,
-        fsdp=config.fsdp if config.fsdp else None,
+        fsdp=config.fsdp,
         fsdp_config=fsdp_config,
         deepspeed=config.deepspeed,
         local_rank=config.local_rank,

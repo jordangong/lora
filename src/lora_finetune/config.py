@@ -10,13 +10,21 @@ import yaml
 class LoraConfig:
     """LoRA-specific configuration."""
 
-    r: int = 16
-    alpha: int = 32
-    dropout: float = 0.05
-    target_modules: Optional[List[str]] = None
-    bias: Literal["none", "all", "lora_only"] = "none"
-    task_type: Optional[str] = None
-    modules_to_save: Optional[List[str]] = None
+    r: int = field(default=16, metadata={"help": "LoRA rank (dimension of low-rank matrices)"})
+    alpha: int = field(default=32, metadata={"help": "LoRA alpha (scaling factor)"})
+    dropout: float = field(default=0.05, metadata={"help": "Dropout probability for LoRA layers"})
+    target_modules: Optional[List[str]] = field(
+        default=None, metadata={"help": "List of module names to apply LoRA to"}
+    )
+    bias: Literal["none", "all", "lora_only"] = field(
+        default="none", metadata={"help": "Bias type: 'none', 'all', or 'lora_only'"}
+    )
+    task_type: Optional[str] = field(
+        default=None, metadata={"help": "Task type for PEFT (e.g., CAUSAL_LM, SEQ_2_SEQ_LM)"}
+    )
+    modules_to_save: Optional[List[str]] = field(
+        default=None, metadata={"help": "List of modules to save (not apply LoRA, but train fully)"}
+    )
 
     def __post_init__(self):
         if self.target_modules is None:
@@ -27,104 +35,189 @@ class LoraConfig:
 class ModelConfig:
     """Model configuration."""
 
-    model_name_or_path: str = "meta-llama/Meta-Llama-3-8B"
-    model_type: Literal["causal_lm", "seq2seq", "vision"] = "causal_lm"
-    torch_dtype: Literal["auto", "float16", "bfloat16", "float32"] = "auto"
-    trust_remote_code: bool = False
-    use_flash_attention_2: bool = True
-    load_in_4bit: bool = False
-    load_in_8bit: bool = False
-    bnb_4bit_compute_dtype: str = "bfloat16"
-    bnb_4bit_quant_type: str = "nf4"
-    bnb_4bit_use_double_quant: bool = True
-    attn_implementation: Optional[str] = None
+    model_name_or_path: str = field(
+        default="meta-llama/Meta-Llama-3-8B",
+        metadata={"help": "Model name or path from HuggingFace Hub or local path"},
+    )
+    model_type: Literal["causal_lm", "seq2seq", "vision"] = field(
+        default="causal_lm", metadata={"help": "Model type: causal_lm, seq2seq, or vision"}
+    )
+    torch_dtype: Literal["auto", "float16", "bfloat16", "float32"] = field(
+        default="auto", metadata={"help": "Torch dtype: auto, float16, bfloat16, or float32"}
+    )
+    trust_remote_code: bool = field(
+        default=False, metadata={"help": "Trust remote code from HuggingFace Hub"}
+    )
+    use_flash_attention_2: bool = field(
+        default=True, metadata={"help": "Use Flash Attention 2 for faster training"}
+    )
+    load_in_4bit: bool = field(
+        default=False, metadata={"help": "Load model in 4-bit quantization (QLoRA)"}
+    )
+    load_in_8bit: bool = field(default=False, metadata={"help": "Load model in 8-bit quantization"})
+    bnb_4bit_compute_dtype: str = field(
+        default="bfloat16", metadata={"help": "Compute dtype for 4-bit quantization"}
+    )
+    bnb_4bit_quant_type: str = field(
+        default="nf4", metadata={"help": "Quantization type: nf4 or fp4"}
+    )
+    bnb_4bit_use_double_quant: bool = field(
+        default=True, metadata={"help": "Use double quantization for 4-bit"}
+    )
+    attn_implementation: Optional[str] = field(
+        default=None,
+        metadata={"help": "Attention implementation: eager, sdpa, or flash_attention_2"},
+    )
 
 
 @dataclass
 class AugmentationConfig:
     """Data augmentation configuration for vision models."""
 
-    # RandomResizedCrop
-    random_resized_crop: bool = True
-    random_resized_crop_scale: tuple = (0.08, 1.0)
-    random_resized_crop_ratio: tuple = (0.75, 1.333)
-
-    # RandomHorizontalFlip
-    random_horizontal_flip: bool = True
-    random_horizontal_flip_p: float = 0.5
-
-    # RandomVerticalFlip
-    random_vertical_flip: bool = False
-    random_vertical_flip_p: float = 0.5
-
-    # ColorJitter
-    color_jitter: bool = False
-    color_jitter_brightness: float = 0.2
-    color_jitter_contrast: float = 0.2
-    color_jitter_saturation: float = 0.2
-    color_jitter_hue: float = 0.1
-
-    # RandomRotation
-    random_rotation: bool = False
-    random_rotation_degrees: float = 15.0
-
-    # RandomAffine
-    random_affine: bool = False
-    random_affine_degrees: float = 0.0
-    random_affine_translate: Optional[tuple] = None
-    random_affine_scale: Optional[tuple] = None
-    random_affine_shear: Optional[float] = None
-
-    # RandomGrayscale
-    random_grayscale: bool = False
-    random_grayscale_p: float = 0.1
-
-    # GaussianBlur
-    gaussian_blur: bool = False
-    gaussian_blur_kernel_size: int = 23
-    gaussian_blur_sigma: tuple = (0.1, 2.0)
-
-    # RandomErasing
-    random_erasing: bool = False
-    random_erasing_p: float = 0.5
-    random_erasing_scale: tuple = (0.02, 0.33)
-    random_erasing_ratio: tuple = (0.3, 3.3)
-
-    # AutoAugment / RandAugment / TrivialAugment
-    auto_augment: Optional[str] = None  # "imagenet", "cifar10", "svhn"
-    rand_augment: bool = False
-    rand_augment_num_ops: int = 2
-    rand_augment_magnitude: int = 9
-    trivial_augment: bool = False
-
-    # Normalization (extracted from image_processor if None)
-    normalize_mean: Optional[List[float]] = None
-    normalize_std: Optional[List[float]] = None
-
-    # Eval transforms
-    eval_resize_factor: float = 1.14  # Resize to image_size * factor before center crop
+    random_resized_crop: bool = field(
+        default=True, metadata={"help": "Enable random resized crop augmentation"}
+    )
+    random_resized_crop_scale: tuple = field(
+        default=(0.08, 1.0), metadata={"help": "Scale range for random resized crop (min, max)"}
+    )
+    random_resized_crop_ratio: tuple = field(
+        default=(0.75, 1.333), metadata={"help": "Aspect ratio range for random resized crop"}
+    )
+    random_horizontal_flip: bool = field(
+        default=True, metadata={"help": "Enable random horizontal flip augmentation"}
+    )
+    random_horizontal_flip_p: float = field(
+        default=0.5, metadata={"help": "Probability of random horizontal flip"}
+    )
+    random_vertical_flip: bool = field(
+        default=False, metadata={"help": "Enable random vertical flip augmentation"}
+    )
+    random_vertical_flip_p: float = field(
+        default=0.5, metadata={"help": "Probability of random vertical flip"}
+    )
+    color_jitter: bool = field(default=False, metadata={"help": "Enable color jitter augmentation"})
+    color_jitter_brightness: float = field(
+        default=0.2, metadata={"help": "Brightness factor for color jitter"}
+    )
+    color_jitter_contrast: float = field(
+        default=0.2, metadata={"help": "Contrast factor for color jitter"}
+    )
+    color_jitter_saturation: float = field(
+        default=0.2, metadata={"help": "Saturation factor for color jitter"}
+    )
+    color_jitter_hue: float = field(default=0.1, metadata={"help": "Hue factor for color jitter"})
+    random_rotation: bool = field(
+        default=False, metadata={"help": "Enable random rotation augmentation"}
+    )
+    random_rotation_degrees: float = field(
+        default=15.0, metadata={"help": "Maximum rotation degrees"}
+    )
+    random_affine: bool = field(
+        default=False, metadata={"help": "Enable random affine transformation"}
+    )
+    random_affine_degrees: float = field(
+        default=0.0, metadata={"help": "Rotation degrees for affine transform"}
+    )
+    random_affine_translate: Optional[tuple] = field(
+        default=None, metadata={"help": "Translation range for affine transform (x, y)"}
+    )
+    random_affine_scale: Optional[tuple] = field(
+        default=None, metadata={"help": "Scale range for affine transform (min, max)"}
+    )
+    random_affine_shear: Optional[float] = field(
+        default=None, metadata={"help": "Shear degrees for affine transform"}
+    )
+    random_grayscale: bool = field(
+        default=False, metadata={"help": "Enable random grayscale augmentation"}
+    )
+    random_grayscale_p: float = field(
+        default=0.1, metadata={"help": "Probability of random grayscale"}
+    )
+    gaussian_blur: bool = field(
+        default=False, metadata={"help": "Enable Gaussian blur augmentation"}
+    )
+    gaussian_blur_kernel_size: int = field(
+        default=23, metadata={"help": "Kernel size for Gaussian blur"}
+    )
+    gaussian_blur_sigma: tuple = field(
+        default=(0.1, 2.0), metadata={"help": "Sigma range for Gaussian blur (min, max)"}
+    )
+    random_erasing: bool = field(
+        default=False, metadata={"help": "Enable random erasing augmentation"}
+    )
+    random_erasing_p: float = field(default=0.5, metadata={"help": "Probability of random erasing"})
+    random_erasing_scale: tuple = field(
+        default=(0.02, 0.33), metadata={"help": "Scale range for random erasing"}
+    )
+    random_erasing_ratio: tuple = field(
+        default=(0.3, 3.3), metadata={"help": "Aspect ratio range for random erasing"}
+    )
+    auto_augment: Optional[str] = field(
+        default=None, metadata={"help": "AutoAugment policy: imagenet, cifar10, or svhn"}
+    )
+    rand_augment: bool = field(default=False, metadata={"help": "Enable RandAugment"})
+    rand_augment_num_ops: int = field(
+        default=2, metadata={"help": "Number of operations for RandAugment"}
+    )
+    rand_augment_magnitude: int = field(
+        default=9, metadata={"help": "Magnitude for RandAugment (0-30)"}
+    )
+    trivial_augment: bool = field(default=False, metadata={"help": "Enable TrivialAugment"})
+    normalize_mean: Optional[List[float]] = field(
+        default=None,
+        metadata={"help": "Normalization mean values (extracted from processor if None)"},
+    )
+    normalize_std: Optional[List[float]] = field(
+        default=None,
+        metadata={"help": "Normalization std values (extracted from processor if None)"},
+    )
+    eval_resize_factor: float = field(
+        default=1.14, metadata={"help": "Resize factor before center crop during eval"}
+    )
 
 
 @dataclass
 class DataConfig:
     """Data configuration."""
 
-    dataset_name: Optional[str] = None
-    dataset_config_name: Optional[str] = None
-    train_file: Optional[str] = None
-    validation_file: Optional[str] = None
-    text_column: str = "text"
-    label_column: str = "label"
-    image_column: str = "image"
-    max_seq_length: int = 2048
-    preprocessing_num_workers: int = 4
-    streaming: bool = False
-    train_split: str = "train"
-    validation_split: str = "validation"
-    max_train_samples: Optional[int] = None
-    max_eval_samples: Optional[int] = None
-    image_size: int = 224
-    prompt_template: Optional[str] = None
+    dataset_name: Optional[str] = field(
+        default=None, metadata={"help": "Dataset name from HuggingFace Hub"}
+    )
+    dataset_config_name: Optional[str] = field(
+        default=None, metadata={"help": "Dataset configuration name"}
+    )
+    train_file: Optional[str] = field(
+        default=None, metadata={"help": "Path to training data file (JSON/CSV)"}
+    )
+    validation_file: Optional[str] = field(
+        default=None, metadata={"help": "Path to validation data file (JSON/CSV)"}
+    )
+    text_column: str = field(default="text", metadata={"help": "Column name for text data"})
+    label_column: str = field(default="label", metadata={"help": "Column name for labels"})
+    image_column: str = field(default="image", metadata={"help": "Column name for image data"})
+    max_seq_length: int = field(
+        default=2048, metadata={"help": "Maximum sequence length for tokenization"}
+    )
+    preprocessing_num_workers: int = field(
+        default=4, metadata={"help": "Number of workers for data preprocessing"}
+    )
+    streaming: bool = field(
+        default=False, metadata={"help": "Enable streaming mode for large datasets"}
+    )
+    train_split: str = field(default="train", metadata={"help": "Name of the training split"})
+    validation_split: str = field(
+        default="validation", metadata={"help": "Name of the validation split"}
+    )
+    max_train_samples: Optional[int] = field(
+        default=None, metadata={"help": "Maximum number of training samples"}
+    )
+    max_eval_samples: Optional[int] = field(
+        default=None, metadata={"help": "Maximum number of evaluation samples"}
+    )
+    image_size: int = field(default=224, metadata={"help": "Image size for vision models"})
+    prompt_template: Optional[str] = field(
+        default=None, metadata={"help": "Prompt template for text formatting"}
+    )
     augmentation: AugmentationConfig = field(default_factory=AugmentationConfig)
 
 
@@ -132,52 +225,106 @@ class DataConfig:
 class TrainingConfig:
     """Training configuration."""
 
-    output_dir: str = "./outputs"
-    num_train_epochs: int = 3
-    per_device_train_batch_size: int = 4
-    per_device_eval_batch_size: int = 4
-    gradient_accumulation_steps: int = 4
-    learning_rate: float = 2e-4
-    weight_decay: float = 0.01
-    warmup_ratio: float = 0.03
-    warmup_steps: int = 0
-    max_grad_norm: float = 1.0
-    lr_scheduler_type: str = "cosine"
-    logging_steps: int = 10
-    save_steps: int = 500
-    save_total_limit: int = 3
-    eval_steps: int = 500
-    eval_strategy: str = "steps"
-    save_strategy: str = "steps"
-    load_best_model_at_end: bool = True
-    metric_for_best_model: str = "eval_loss"
-    greater_is_better: bool = False
-    bf16: bool = True
-    fp16: bool = False
-    tf32: bool = True
-    gradient_checkpointing: bool = True
-    gradient_checkpointing_kwargs: Optional[dict] = None
-    optim: str = "adamw_torch"
-    seed: int = 42
-    data_seed: int = 42
-    dataloader_num_workers: int = 4
-    dataloader_pin_memory: bool = True
-    remove_unused_columns: bool = True
-    report_to: str = "wandb"
-    wandb_project: Optional[str] = None
-    wandb_run_name: Optional[str] = None
-    wandb_watch: str = "gradients"
-    wandb_log_model: bool = False
-    run_name: Optional[str] = None
-    fsdp: str = ""
-    fsdp_config: Optional[dict] = None
-    deepspeed: Optional[str] = None
-    local_rank: int = -1
-    ddp_find_unused_parameters: bool = False
-    resume_from_checkpoint: Optional[str] = None
-    hub_model_id: Optional[str] = None
-    push_to_hub: bool = False
-    hub_token: Optional[str] = None
+    output_dir: str = field(
+        default="./outputs", metadata={"help": "Output directory for model and logs"}
+    )
+    num_train_epochs: int = field(default=3, metadata={"help": "Number of training epochs"})
+    per_device_train_batch_size: int = field(
+        default=4, metadata={"help": "Training batch size per device"}
+    )
+    per_device_eval_batch_size: int = field(
+        default=4, metadata={"help": "Evaluation batch size per device"}
+    )
+    gradient_accumulation_steps: int = field(
+        default=4, metadata={"help": "Number of gradient accumulation steps"}
+    )
+    learning_rate: float = field(default=2e-4, metadata={"help": "Learning rate"})
+    weight_decay: float = field(default=0.01, metadata={"help": "Weight decay for AdamW optimizer"})
+    warmup_ratio: float = field(
+        default=0.03, metadata={"help": "Warmup ratio of total training steps"}
+    )
+    warmup_steps: int = field(
+        default=0, metadata={"help": "Number of warmup steps (overrides warmup_ratio if > 0)"}
+    )
+    max_grad_norm: float = field(
+        default=1.0, metadata={"help": "Maximum gradient norm for clipping"}
+    )
+    lr_scheduler_type: str = field(
+        default="cosine", metadata={"help": "LR scheduler type: linear, cosine, constant, etc."}
+    )
+    logging_steps: int = field(default=10, metadata={"help": "Log every N steps"})
+    save_steps: int = field(default=500, metadata={"help": "Save checkpoint every N steps"})
+    save_total_limit: int = field(
+        default=3, metadata={"help": "Maximum number of checkpoints to keep"}
+    )
+    eval_steps: int = field(default=500, metadata={"help": "Evaluate every N steps"})
+    eval_strategy: str = field(
+        default="steps", metadata={"help": "Evaluation strategy: no, steps, or epoch"}
+    )
+    save_strategy: str = field(
+        default="steps", metadata={"help": "Save strategy: no, steps, or epoch"}
+    )
+    load_best_model_at_end: bool = field(
+        default=True, metadata={"help": "Load best model at end of training"}
+    )
+    metric_for_best_model: str = field(
+        default="eval_loss", metadata={"help": "Metric to use for best model selection"}
+    )
+    greater_is_better: bool = field(
+        default=False, metadata={"help": "Whether higher metric values are better"}
+    )
+    bf16: bool = field(default=True, metadata={"help": "Use bfloat16 mixed precision"})
+    fp16: bool = field(default=False, metadata={"help": "Use float16 mixed precision"})
+    tf32: bool = field(default=True, metadata={"help": "Enable TF32 on Ampere GPUs"})
+    gradient_checkpointing: bool = field(
+        default=True, metadata={"help": "Enable gradient checkpointing to save memory"}
+    )
+    gradient_checkpointing_kwargs: Optional[dict] = field(
+        default=None, metadata={"help": "Kwargs for gradient checkpointing"}
+    )
+    optim: str = field(
+        default="adamw_torch", metadata={"help": "Optimizer: adamw_torch, adamw_hf, sgd, etc."}
+    )
+    seed: int = field(default=42, metadata={"help": "Random seed for reproducibility"})
+    data_seed: int = field(default=42, metadata={"help": "Random seed for data sampling"})
+    dataloader_num_workers: int = field(
+        default=4, metadata={"help": "Number of dataloader workers"}
+    )
+    dataloader_pin_memory: bool = field(default=True, metadata={"help": "Pin memory in dataloader"})
+    remove_unused_columns: bool = field(
+        default=True, metadata={"help": "Remove unused columns from dataset"}
+    )
+    report_to: str = field(
+        default="wandb", metadata={"help": "Report to: wandb, tensorboard, or none"}
+    )
+    wandb_project: Optional[str] = field(
+        default=None, metadata={"help": "Weights & Biases project name"}
+    )
+    wandb_run_name: Optional[str] = field(
+        default=None, metadata={"help": "Weights & Biases run name"}
+    )
+    wandb_watch: str = field(
+        default="gradients", metadata={"help": "W&B watch mode: gradients, all, or false"}
+    )
+    wandb_log_model: bool = field(default=False, metadata={"help": "Log model to W&B"})
+    run_name: Optional[str] = field(default=None, metadata={"help": "Run name for logging"})
+    fsdp: Optional[str] = field(default=None, metadata={"help": "FSDP configuration string"})
+    fsdp_config: Optional[dict] = field(default=None, metadata={"help": "FSDP configuration dict"})
+    deepspeed: Optional[str] = field(
+        default=None, metadata={"help": "Path to DeepSpeed config file"}
+    )
+    local_rank: int = field(default=-1, metadata={"help": "Local rank for distributed training"})
+    ddp_find_unused_parameters: bool = field(
+        default=False, metadata={"help": "Find unused parameters in DDP"}
+    )
+    resume_from_checkpoint: Optional[str] = field(
+        default=None, metadata={"help": "Path to checkpoint to resume from"}
+    )
+    hub_model_id: Optional[str] = field(
+        default=None, metadata={"help": "HuggingFace Hub model ID for pushing"}
+    )
+    push_to_hub: bool = field(default=False, metadata={"help": "Push model to HuggingFace Hub"})
+    hub_token: Optional[str] = field(default=None, metadata={"help": "HuggingFace Hub token"})
 
 
 @dataclass
