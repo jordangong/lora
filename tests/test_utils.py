@@ -1,0 +1,240 @@
+"""Tests for utility functions."""
+
+import logging
+import random
+
+import numpy as np
+import pytest
+import torch
+
+from lora_finetune.utils import (
+    check_bitsandbytes_available,
+    check_flash_attention_available,
+    count_parameters,
+    ensure_dir,
+    find_all_linear_names,
+    get_device,
+    get_gpu_memory_usage,
+    get_model_size,
+    set_seed,
+    setup_logging,
+)
+
+
+class TestSetSeed:
+    """Tests for set_seed function."""
+
+    def test_set_seed_reproducibility(self):
+        """Test that set_seed produces reproducible results."""
+        set_seed(42)
+        random_val1 = random.random()
+        np_val1 = np.random.rand()
+        torch_val1 = torch.rand(1).item()
+
+        set_seed(42)
+        random_val2 = random.random()
+        np_val2 = np.random.rand()
+        torch_val2 = torch.rand(1).item()
+
+        assert random_val1 == random_val2
+        assert np_val1 == np_val2
+        assert torch_val1 == torch_val2
+
+    def test_different_seeds_different_results(self):
+        """Test that different seeds produce different results."""
+        set_seed(42)
+        val1 = torch.rand(1).item()
+
+        set_seed(123)
+        val2 = torch.rand(1).item()
+
+        assert val1 != val2
+
+
+class TestSetupLogging:
+    """Tests for setup_logging function."""
+
+    def test_setup_logging_returns_logger(self):
+        """Test that setup_logging returns a logger."""
+        logger = setup_logging()
+        assert isinstance(logger, logging.Logger)
+
+    def test_setup_logging_level(self):
+        """Test that setup_logging accepts level parameter."""
+        # Just verify the function accepts the level parameter without error
+        logger = setup_logging(level="WARNING")
+        assert logger is not None
+
+
+class TestGetDevice:
+    """Tests for get_device function."""
+
+    def test_get_device_returns_device(self):
+        """Test that get_device returns a torch device."""
+        device = get_device()
+        assert isinstance(device, torch.device)
+
+    def test_get_device_valid_type(self):
+        """Test that device type is valid."""
+        device = get_device()
+        assert device.type in ["cuda", "mps", "cpu"]
+
+
+class TestGetGpuMemoryUsage:
+    """Tests for get_gpu_memory_usage function."""
+
+    def test_get_gpu_memory_usage_returns_dict(self):
+        """Test that function returns a dictionary."""
+        stats = get_gpu_memory_usage()
+        assert isinstance(stats, dict)
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
+    def test_get_gpu_memory_usage_with_cuda(self):
+        """Test GPU memory stats when CUDA is available."""
+        stats = get_gpu_memory_usage()
+        assert len(stats) > 0
+        for gpu_name, info in stats.items():
+            assert "allocated_gb" in info
+            assert "reserved_gb" in info
+            assert "total_gb" in info
+            assert "free_gb" in info
+
+
+class TestGetModelSize:
+    """Tests for get_model_size function."""
+
+    def test_get_model_size_simple_model(self):
+        """Test model size calculation for a simple model."""
+        model = torch.nn.Linear(10, 5)
+        stats = get_model_size(model)
+
+        assert "total_params" in stats
+        assert "trainable_params" in stats
+        assert "trainable_percent" in stats
+        assert "param_size_mb" in stats
+
+        # Linear(10, 5) has 10*5 + 5 = 55 parameters
+        assert stats["total_params"] == 55
+        assert stats["trainable_params"] == 55
+        assert stats["trainable_percent"] == 100.0
+
+    def test_get_model_size_frozen_params(self):
+        """Test model size with frozen parameters."""
+        model = torch.nn.Sequential(
+            torch.nn.Linear(10, 5),
+            torch.nn.Linear(5, 2),
+        )
+        # Freeze first layer
+        for param in model[0].parameters():
+            param.requires_grad = False
+
+        stats = get_model_size(model)
+
+        # First layer: 10*5 + 5 = 55, Second layer: 5*2 + 2 = 12
+        assert stats["total_params"] == 67
+        assert stats["trainable_params"] == 12
+        assert stats["trainable_percent"] < 100.0
+
+
+class TestCountParameters:
+    """Tests for count_parameters function."""
+
+    def test_count_parameters(self):
+        """Test parameter counting."""
+        model = torch.nn.Linear(10, 5)
+        total, trainable = count_parameters(model)
+
+        assert total == 55
+        assert trainable == 55
+
+    def test_count_parameters_with_frozen(self):
+        """Test parameter counting with frozen layers."""
+        model = torch.nn.Linear(10, 5)
+        for param in model.parameters():
+            param.requires_grad = False
+
+        total, trainable = count_parameters(model)
+
+        assert total == 55
+        assert trainable == 0
+
+
+class TestFindAllLinearNames:
+    """Tests for find_all_linear_names function."""
+
+    def test_find_linear_names_simple(self):
+        """Test finding linear layer names in a simple model."""
+        model = torch.nn.Sequential(
+            torch.nn.Linear(10, 5),
+            torch.nn.ReLU(),
+            torch.nn.Linear(5, 2),
+        )
+        linear_names = find_all_linear_names(model)
+
+        # Should find the linear layers (named by their index in Sequential)
+        assert len(linear_names) > 0
+
+    def test_find_linear_names_nested(self):
+        """Test finding linear layer names in a nested model."""
+
+        class NestedModel(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.encoder = torch.nn.Sequential(
+                    torch.nn.Linear(10, 5),
+                    torch.nn.ReLU(),
+                )
+                self.decoder = torch.nn.Linear(5, 2)
+
+            def forward(self, x):
+                return self.decoder(self.encoder(x))
+
+        model = NestedModel()
+        linear_names = find_all_linear_names(model)
+
+        assert len(linear_names) > 0
+
+
+class TestEnsureDir:
+    """Tests for ensure_dir function."""
+
+    def test_ensure_dir_creates_directory(self, tmp_path):
+        """Test that ensure_dir creates a directory."""
+        new_dir = tmp_path / "new_directory"
+        result = ensure_dir(str(new_dir))
+
+        assert new_dir.exists()
+        assert new_dir.is_dir()
+        assert result == str(new_dir)
+
+    def test_ensure_dir_existing_directory(self, tmp_path):
+        """Test that ensure_dir works with existing directory."""
+        existing_dir = tmp_path / "existing"
+        existing_dir.mkdir()
+
+        result = ensure_dir(str(existing_dir))
+
+        assert existing_dir.exists()
+        assert result == str(existing_dir)
+
+    def test_ensure_dir_nested(self, tmp_path):
+        """Test that ensure_dir creates nested directories."""
+        nested_dir = tmp_path / "a" / "b" / "c"
+        result = ensure_dir(str(nested_dir))
+
+        assert nested_dir.exists()
+        assert result == str(nested_dir)
+
+
+class TestCheckAvailability:
+    """Tests for availability check functions."""
+
+    def test_check_flash_attention_available(self):
+        """Test flash attention availability check."""
+        result = check_flash_attention_available()
+        assert isinstance(result, bool)
+
+    def test_check_bitsandbytes_available(self):
+        """Test bitsandbytes availability check."""
+        result = check_bitsandbytes_available()
+        assert isinstance(result, bool)

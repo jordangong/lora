@@ -17,17 +17,23 @@ A flexible framework for finetuning vision and language models using LoRA (Low-R
 ## Installation
 
 ```bash
+# Install uv if not already installed
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
 # Basic installation
-pip install -e .
+uv sync
 
 # With Flash Attention 2
-pip install -e ".[flash]"
+uv sync --extra flash
 
 # With bitsandbytes quantization
-pip install -e ".[bnb]"
+uv sync --extra bnb
 
-# Full installation
-pip install -e ".[all]"
+# Multiple extras (uv sync is declarative - specify all desired extras together)
+uv sync --extra flash --extra bnb --extra dev
+
+# Full installation (all extras)
+uv sync --all-extras
 ```
 
 ## Quick Start
@@ -35,7 +41,7 @@ pip install -e ".[all]"
 ### Finetune Llama3 on text data
 
 ```bash
-python -m lora_finetune.train \
+uv run python -m lora_finetune.train \
     --config configs/llama3_lora.yaml \
     --model_name_or_path meta-llama/Meta-Llama-3-8B \
     --dataset_name tatsu-lab/alpaca \
@@ -45,7 +51,7 @@ python -m lora_finetune.train \
 ### Finetune ViT on image classification
 
 ```bash
-python -m lora_finetune.train \
+uv run python -m lora_finetune.train \
     --config configs/vit_lora.yaml \
     --model_name_or_path google/vit-base-patch16-224 \
     --dataset_name cifar10 \
@@ -55,7 +61,7 @@ python -m lora_finetune.train \
 ### Finetune Mistral
 
 ```bash
-python -m lora_finetune.train \
+uv run python -m lora_finetune.train \
     --config configs/mistral_lora.yaml \
     --model_name_or_path mistralai/Mistral-7B-v0.1 \
     --dataset_name tatsu-lab/alpaca \
@@ -93,7 +99,7 @@ fsdp: "full_shard auto_wrap"
 ## Multi-GPU Training with FSDP
 
 ```bash
-accelerate launch --config_file configs/fsdp_config.yaml \
+uv run accelerate launch --config_file configs/fsdp_config.yaml \
     -m lora_finetune.train \
     --config configs/llama3_lora.yaml
 ```
@@ -102,13 +108,35 @@ accelerate launch --config_file configs/fsdp_config.yaml \
 
 ```bash
 # Login to wandb
-wandb login
+uv run wandb login
 
 # Enable logging
-python -m lora_finetune.train \
+uv run python -m lora_finetune.train \
     --config configs/llama3_lora.yaml \
     --report_to wandb \
     --wandb_project my-lora-project
+```
+
+## Testing
+
+```bash
+# Install dev dependencies
+uv sync --extra dev
+
+# Run all tests
+uv run pytest
+
+# Run with verbose output
+uv run pytest -v
+
+# Run specific test file
+uv run pytest tests/test_config.py
+
+# Run specific test function
+uv run pytest tests/test_config.py::test_function_name
+
+# Run with coverage
+uv run pytest --cov=lora_finetune
 ```
 
 ## Project Structure
