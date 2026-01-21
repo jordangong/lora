@@ -146,26 +146,7 @@ def get_peft_model_with_lora(
         modules_to_save=lora_config.modules_to_save,
     )
 
-    logger.info(f"Applying LoRA with config: r={lora_config.r}, alpha={lora_config.alpha}")
+    logger.info(f"Applying LoRA with config: {lora_config}")
     model = get_peft_model(model, peft_config)
-    model.print_trainable_parameters()
 
     return model
-
-
-def print_model_info(model: PreTrainedModel) -> Dict[str, Any]:
-    """Print and return model information."""
-    total_params = sum(p.numel() for p in model.parameters())
-    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-
-    info = {
-        "total_params": total_params,
-        "trainable_params": trainable_params,
-        "trainable_percent": 100 * trainable_params / total_params,
-    }
-
-    logger.info(f"Total parameters: {total_params:,}")
-    logger.info(f"Trainable parameters: {trainable_params:,}")
-    logger.info(f"Trainable %: {info['trainable_percent']:.4f}%")
-
-    return info

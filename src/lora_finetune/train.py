@@ -3,7 +3,7 @@
 import argparse
 import dataclasses
 import logging
-from typing import Any, Dict, List, Optional, Type, get_args, get_origin
+from typing import Any, Dict, List, Optional, Type, Union, get_args, get_origin
 
 import torch
 from transformers import set_seed as hf_set_seed
@@ -25,6 +25,19 @@ from .trainer import create_trainer, prepare_model_for_training
 from .utils import print_gpu_memory_usage, print_model_size, set_seed, setup_logging
 
 logger = logging.getLogger(__name__)
+
+
+def _is_list_or_str_union(type_hint: Type) -> bool:
+    """Check if type is Union[List[str], str] (possibly Optional)."""
+    origin = get_origin(type_hint)
+    if origin is Union:
+        args = get_args(type_hint)
+        non_none_args = [a for a in args if a is not type(None)]
+        # Check if we have both list and str types
+        has_list = any(get_origin(a) is list or a is list for a in non_none_args)
+        has_str = any(a is str for a in non_none_args)
+        return has_list and has_str
+    return False
 
 
 def _get_base_type(type_hint: Type) -> Type:
@@ -93,6 +106,15 @@ def _add_dataclass_args(
             no_arg_name = f"--no_{prefix}{field_name}" if prefix else f"--no_{field_name}"
             parser.add_argument(
                 no_arg_name, action="store_true", default=None, help=argparse.SUPPRESS
+            )
+        # Handle Union[List[str], str] fields (e.g., target_modules supporting regex)
+        elif _is_list_or_str_union(field_info.type):
+            parser.add_argument(
+                arg_name,
+                type=str,
+                nargs="*",
+                default=None,
+                help=_build_help(help_text, default_val),
             )
         # Handle list fields
         elif get_origin(field_type) is list or field_type is list:
@@ -200,6 +222,13 @@ def _apply_args_to_config(
             # Convert list to tuple if needed
             if (get_origin(field_type) is tuple or field_type is tuple) and isinstance(value, list):
                 value = tuple(value)
+            # For Union[List[str], str] fields, keep single value as string (for regex)
+            if (
+                _is_list_or_str_union(field_info.type)
+                and isinstance(value, list)
+                and len(value) == 1
+            ):
+                value = value[0]
             setattr(config_obj, field_name, value)
 
 

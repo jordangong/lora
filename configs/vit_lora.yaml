@@ -17,6 +17,7 @@ lora:
     - value
     - dense
   bias: none
+  modules_to_save: ["classifier"]
 
 data:
   dataset_name: cifar10

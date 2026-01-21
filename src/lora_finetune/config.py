@@ -1,7 +1,7 @@
 """Configuration dataclasses for LoRA finetuning."""
 
 from dataclasses import dataclass, field
-from typing import List, Literal, Optional
+from typing import List, Literal, Optional, Union
 
 import yaml
 
@@ -13,8 +13,11 @@ class LoraConfig:
     r: int = field(default=16, metadata={"help": "LoRA rank (dimension of low-rank matrices)"})
     alpha: int = field(default=32, metadata={"help": "LoRA alpha (scaling factor)"})
     dropout: float = field(default=0.05, metadata={"help": "Dropout probability for LoRA layers"})
-    target_modules: Optional[List[str]] = field(
-        default=None, metadata={"help": "List of module names to apply LoRA to"}
+    target_modules: Optional[Union[List[str], str]] = field(
+        default=None,
+        metadata={
+            "help": "List of module names or regex expression of module names to apply LoRA to"
+        },
     )
     bias: Literal["none", "all", "lora_only"] = field(
         default="none", metadata={"help": "Bias type: 'none', 'all', or 'lora_only'"}
