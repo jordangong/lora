@@ -238,7 +238,7 @@ class TestTrainingConfigDefaults:
     def test_default_evaluation_settings(self):
         """Test default evaluation settings."""
         config = TrainingConfig()
-        assert config.evaluation_strategy == "steps"
+        assert config.eval_strategy == "steps"
         assert config.eval_steps == 500
         assert config.load_best_model_at_end is True
         assert config.metric_for_best_model == "eval_loss"

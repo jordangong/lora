@@ -77,7 +77,7 @@ def load_model_and_tokenizer(
 
     torch_dtype = get_torch_dtype(config.torch_dtype)
     if torch_dtype != "auto":
-        model_kwargs["torch_dtype"] = torch_dtype
+        model_kwargs["dtype"] = torch_dtype
 
     if config.use_flash_attention_2:
         model_kwargs["attn_implementation"] = "flash_attention_2"
@@ -92,6 +92,7 @@ def load_model_and_tokenizer(
 
     if config.model_type == "vision" and num_labels:
         model_kwargs["num_labels"] = num_labels
+        model_kwargs["ignore_mismatched_sizes"] = True
 
     logger.info(f"Loading model from {config.model_name_or_path}")
     model = auto_class.from_pretrained(
