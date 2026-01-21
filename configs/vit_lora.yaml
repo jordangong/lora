@@ -1,0 +1,90 @@
+model:
+  model_name_or_path: google/vit-base-patch16-224
+  model_type: vision
+  torch_dtype: float32
+  trust_remote_code: false
+  use_flash_attention_2: false
+  load_in_4bit: false
+  load_in_8bit: false
+
+lora:
+  r: 16
+  alpha: 32
+  dropout: 0.05
+  target_modules:
+    - query
+    - key
+    - value
+    - dense
+  bias: none
+
+data:
+  dataset_name: cifar10
+  image_column: img
+  label_column: label
+  image_size: 224
+  preprocessing_num_workers: 4
+  train_split: train
+  validation_split: test
+
+  augmentation:
+    # Spatial transforms
+    random_resized_crop: true
+    random_resized_crop_scale: [0.08, 1.0]
+    random_resized_crop_ratio: [0.75, 1.333]
+    random_horizontal_flip: true
+    random_horizontal_flip_p: 0.5
+    random_vertical_flip: false
+
+    # Color transforms
+    color_jitter: false
+    color_jitter_brightness: 0.2
+    color_jitter_contrast: 0.2
+    color_jitter_saturation: 0.2
+    color_jitter_hue: 0.1
+
+    # Advanced augmentation (pick one or none)
+    auto_augment: null  # Options: imagenet, cifar10, svhn
+    rand_augment: false
+    rand_augment_num_ops: 2
+    rand_augment_magnitude: 9
+    trivial_augment: false
+
+    # Post-tensor augmentation
+    random_erasing: false
+    random_erasing_p: 0.25
+
+    # Normalization (null = extract from image_processor)
+    normalize_mean: null
+    normalize_std: null
+
+    # Eval settings
+    eval_resize_factor: 1.14
+
+training:
+  output_dir: ./outputs/vit-lora
+  num_train_epochs: 5
+  per_device_train_batch_size: 32
+  per_device_eval_batch_size: 32
+  gradient_accumulation_steps: 1
+  learning_rate: 1.0e-4
+  weight_decay: 0.01
+  warmup_ratio: 0.1
+  max_grad_norm: 1.0
+  lr_scheduler_type: cosine
+  logging_steps: 50
+  save_steps: 500
+  eval_steps: 500
+  evaluation_strategy: steps
+  save_total_limit: 3
+  load_best_model_at_end: true
+  metric_for_best_model: eval_loss
+  bf16: false
+  fp16: true
+  tf32: true
+  gradient_checkpointing: true
+  optim: adamw_torch
+  seed: 42
+  dataloader_num_workers: 4
+  report_to: wandb
+  wandb_project: vit-lora-finetune

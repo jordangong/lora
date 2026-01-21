@@ -1,0 +1,56 @@
+model:
+  model_name_or_path: mistralai/Mistral-7B-v0.1
+  model_type: causal_lm
+  torch_dtype: bfloat16
+  trust_remote_code: false
+  use_flash_attention_2: true
+  load_in_4bit: false
+  load_in_8bit: false
+  bnb_4bit_compute_dtype: bfloat16
+  bnb_4bit_quant_type: nf4
+  bnb_4bit_use_double_quant: true
+
+lora:
+  r: 16
+  alpha: 32
+  dropout: 0.05
+  target_modules:
+    - q_proj
+    - k_proj
+    - v_proj
+    - o_proj
+    - gate_proj
+    - up_proj
+    - down_proj
+  bias: none
+
+data:
+  dataset_name: tatsu-lab/alpaca
+  text_column: text
+  max_seq_length: 2048
+  preprocessing_num_workers: 4
+  train_split: train
+
+training:
+  output_dir: ./outputs/mistral-lora
+  num_train_epochs: 3
+  per_device_train_batch_size: 4
+  per_device_eval_batch_size: 4
+  gradient_accumulation_steps: 4
+  learning_rate: 2.0e-4
+  weight_decay: 0.01
+  warmup_ratio: 0.03
+  max_grad_norm: 1.0
+  lr_scheduler_type: cosine
+  logging_steps: 10
+  save_steps: 500
+  save_total_limit: 3
+  bf16: true
+  fp16: false
+  tf32: true
+  gradient_checkpointing: true
+  optim: adamw_torch
+  seed: 42
+  dataloader_num_workers: 4
+  report_to: wandb
+  wandb_project: mistral-lora-finetune
