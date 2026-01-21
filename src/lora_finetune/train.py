@@ -271,7 +271,7 @@ def train_llm(config: Config) -> None:
         model_config=config.model,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
-        tokenizer=tokenizer,
+        processing_class=tokenizer,
         data_collator=data_collator,
     )
 
@@ -290,6 +290,14 @@ def train_vision(config: Config) -> None:
     """Train a vision model with LoRA."""
     logger.info("Starting vision model training")
     logger.info(f"Model: {config.model.model_name_or_path}")
+
+    # Vision training uses set_transform which needs the original image column
+    # before it's transformed to pixel_values, so we must keep unused columns
+    if config.training.remove_unused_columns:
+        logger.info(
+            "Disabling remove_unused_columns for vision training (required for set_transform)"
+        )
+        config.training.remove_unused_columns = False
 
     logger.info("Loading dataset")
     dataset = load_vision_dataset(config.data)
@@ -338,7 +346,7 @@ def train_vision(config: Config) -> None:
         model_config=config.model,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
-        tokenizer=None,
+        processing_class=None,
         data_collator=data_collator,
     )
 

@@ -343,6 +343,24 @@ def preprocess_vision_dataset(
     config = config or DataConfig()
     aug_config = config.augmentation
 
+    # Validate that required columns exist in the dataset
+    sample_split = config.train_split if config.train_split in dataset else list(dataset.keys())[0]
+    available_columns = dataset[sample_split].column_names
+
+    if config.image_column not in available_columns:
+        raise ValueError(
+            f"Image column '{config.image_column}' not found in dataset. "
+            f"Available columns: {available_columns}. "
+            f"Set data.image_column to the correct column name."
+        )
+
+    if config.label_column not in available_columns:
+        raise ValueError(
+            f"Label column '{config.label_column}' not found in dataset. "
+            f"Available columns: {available_columns}. "
+            f"Set data.label_column to the correct column name."
+        )
+
     # Get image size - prefer from processor if available
     image_size = get_image_size_from_processor(image_processor, config.image_size)
     logger.info(f"Using image size: {image_size}")
@@ -393,41 +411,6 @@ def preprocess_vision_dataset(
         processed_dataset[config.validation_split] = eval_ds
 
     return processed_dataset
-
-
-def preprocess_batch(
-    examples: Dict[str, List[Any]],
-    image_processor: Optional[Callable] = None,
-    transform: Optional[transforms.Compose] = None,
-    image_column: str = "image",
-    label_column: str = "label",
-) -> Dict[str, List[Any]]:
-    """Preprocess a batch of vision examples."""
-    images = examples[image_column]
-    pixel_values = []
-
-    for image in images:
-        if isinstance(image, str):
-            image = Image.open(image).convert("RGB")
-        elif not isinstance(image, Image.Image):
-            image = Image.fromarray(image).convert("RGB")
-
-        if image_processor is not None:
-            inputs = image_processor(image, return_tensors="pt")
-            pv = inputs["pixel_values"].squeeze(0)
-        elif transform is not None:
-            pv = transform(image)
-        else:
-            raise ValueError("Either image_processor or transform must be provided")
-
-        pixel_values.append(pv)
-
-    result = {"pixel_values": pixel_values}
-
-    if label_column in examples:
-        result["labels"] = examples[label_column]
-
-    return result
 
 
 def get_vision_collator() -> Callable:

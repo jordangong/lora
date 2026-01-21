@@ -8,7 +8,6 @@ from peft import PeftModel
 from transformers import (
     DataCollator,
     PreTrainedModel,
-    PreTrainedTokenizer,
     Trainer,
     TrainingArguments,
 )
@@ -176,7 +175,7 @@ class LoraTrainer(Trainer):
         args: TrainingArguments,
         train_dataset=None,
         eval_dataset=None,
-        tokenizer: Optional[PreTrainedTokenizer] = None,
+        processing_class=None,
         data_collator: Optional[DataCollator] = None,
         callbacks: Optional[List[TrainerCallback]] = None,
         **kwargs,
@@ -186,7 +185,7 @@ class LoraTrainer(Trainer):
             args=args,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
-            tokenizer=tokenizer,
+            processing_class=processing_class,
             data_collator=data_collator,
             callbacks=callbacks,
             **kwargs,
@@ -217,7 +216,7 @@ def create_trainer(
     model_config: ModelConfig,
     train_dataset,
     eval_dataset=None,
-    tokenizer: Optional[PreTrainedTokenizer] = None,
+    processing_class=None,
     data_collator: Optional[DataCollator] = None,
 ) -> LoraTrainer:
     """Create trainer with all optimizations configured."""
@@ -234,7 +233,7 @@ def create_trainer(
         args=training_args,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
-        tokenizer=tokenizer,
+        processing_class=processing_class,
         data_collator=data_collator,
         callbacks=callbacks,
     )
