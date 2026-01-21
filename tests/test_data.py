@@ -474,3 +474,41 @@ class TestPromptTemplates:
         assert "<|eot_id|>" in CHAT_TEMPLATE
         assert "{instruction}" in CHAT_TEMPLATE
         assert "{output}" in CHAT_TEMPLATE
+
+
+class TestLoadTextDataset:
+    """Tests for load_text_dataset function."""
+
+    def test_load_raises_without_dataset_or_file(self):
+        """Test that error is raised without dataset_name or train_file."""
+        from lora_finetune.config import DataConfig
+        from lora_finetune.data.text_data import load_text_dataset
+
+        config = DataConfig(dataset_name=None, train_file=None)
+
+        with pytest.raises(ValueError, match="Either dataset_name or train_file"):
+            load_text_dataset(config)
+
+
+class TestPrepareDatasetForCausalLM:
+    """Tests for prepare_dataset_for_causal_lm function."""
+
+    def test_prepare_adds_labels(self):
+        """Test that labels are added to the result."""
+        from lora_finetune.data.text_data import prepare_dataset_for_causal_lm
+
+        class MockTokenizer:
+            def __call__(self, texts, truncation, max_length, padding):
+                return {
+                    "input_ids": [[1, 2, 3, 4] for _ in texts],
+                    "attention_mask": [[1, 1, 1, 1] for _ in texts],
+                }
+
+        tokenizer = MockTokenizer()
+        examples = {"text": ["Hello world", "Test text"]}
+
+        result = prepare_dataset_for_causal_lm(examples, tokenizer, max_length=512)
+
+        assert "input_ids" in result
+        assert "labels" in result
+        assert result["labels"] == result["input_ids"]

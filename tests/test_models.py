@@ -14,6 +14,7 @@ from lora_finetune.models.llm import (
     LLM_TARGET_MODULES,
     get_llm_target_modules,
     get_special_tokens_dict,
+    resize_token_embeddings,
 )
 from lora_finetune.models.vision import (
     VISION_TARGET_MODULES,
@@ -319,3 +320,67 @@ class TestVisionDatasetHelpers:
         dataset = MockDataset()
         label2id = get_label2id(dataset)
         assert label2id == {"cat": 0, "dog": 1, "bird": 2}
+
+
+class TestResizeTokenEmbeddings:
+    """Tests for resize_token_embeddings function."""
+
+    def test_resize_when_tokenizer_larger(self):
+        """Test resizing when tokenizer has more tokens."""
+
+        class MockEmbedding:
+            def __init__(self):
+                self.weight = torch.zeros(100, 768)
+
+        class MockModel:
+            def __init__(self):
+                self._embedding = MockEmbedding()
+                self._resized = False
+
+            def get_input_embeddings(self):
+                return self._embedding
+
+            def resize_token_embeddings(self, new_size):
+                self._resized = True
+                self._new_size = new_size
+
+        class MockTokenizer:
+            def __len__(self):
+                return 150  # More than model's 100
+
+        model = MockModel()
+        tokenizer = MockTokenizer()
+
+        result = resize_token_embeddings(model, tokenizer)
+
+        assert result._resized is True
+        assert result._new_size == 150
+
+    def test_no_resize_when_tokenizer_smaller(self):
+        """Test no resize when tokenizer has fewer tokens."""
+
+        class MockEmbedding:
+            def __init__(self):
+                self.weight = torch.zeros(100, 768)
+
+        class MockModel:
+            def __init__(self):
+                self._embedding = MockEmbedding()
+                self._resized = False
+
+            def get_input_embeddings(self):
+                return self._embedding
+
+            def resize_token_embeddings(self, new_size):
+                self._resized = True
+
+        class MockTokenizer:
+            def __len__(self):
+                return 50  # Less than model's 100
+
+        model = MockModel()
+        tokenizer = MockTokenizer()
+
+        result = resize_token_embeddings(model, tokenizer)
+
+        assert result._resized is False

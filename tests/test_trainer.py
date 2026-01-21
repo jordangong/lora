@@ -2,12 +2,18 @@
 
 import os
 
+import numpy as np
+import torch
 from torch import nn
 
-from lora_finetune.config import TrainingConfig
+from lora_finetune.config import ModelConfig, TrainingConfig
 from lora_finetune.trainer import (
+    LoraTrainer,
     WandbCallback,
+    compute_metrics_for_classification,
+    compute_metrics_for_lm,
     enable_gradient_checkpointing,
+    get_training_arguments,
     prepare_model_for_training,
 )
 
@@ -243,3 +249,270 @@ class TestTrainingConfigDefaults:
         assert config.load_best_model_at_end is True
         assert config.metric_for_best_model == "eval_loss"
         assert config.greater_is_better is False
+
+
+class TestGetTrainingArgumentsFunction:
+    """Tests for get_training_arguments function."""
+
+    def test_basic_training_arguments(self):
+        """Test creating basic TrainingArguments."""
+        training_config = TrainingConfig(
+            output_dir="./test-output",
+            num_train_epochs=3,
+            learning_rate=2e-4,
+        )
+        model_config = ModelConfig()
+
+        args = get_training_arguments(training_config, model_config)
+
+        assert args.output_dir == "./test-output"
+        assert args.num_train_epochs == 3
+        assert args.learning_rate == 2e-4
+
+    def test_training_arguments_with_fsdp(self):
+        """Test TrainingArguments with FSDP config."""
+        training_config = TrainingConfig(
+            output_dir="./test-output",
+            fsdp="full_shard auto_wrap",
+        )
+        model_config = ModelConfig()
+
+        args = get_training_arguments(training_config, model_config)
+
+        # FSDP is converted to list of FSDPOption enums
+        assert len(args.fsdp) == 2
+        assert args.fsdp_config is not None
+
+    def test_training_arguments_gradient_checkpointing_kwargs(self):
+        """Test that gradient_checkpointing_kwargs default is set."""
+        training_config = TrainingConfig(
+            output_dir="./test-output",
+            gradient_checkpointing=True,
+        )
+        model_config = ModelConfig()
+
+        args = get_training_arguments(training_config, model_config)
+
+        assert args.gradient_checkpointing is True
+        assert args.gradient_checkpointing_kwargs == {"use_reentrant": False}
+
+    def test_training_arguments_custom_gradient_checkpointing_kwargs(self):
+        """Test custom gradient_checkpointing_kwargs is preserved."""
+        training_config = TrainingConfig(
+            output_dir="./test-output",
+            gradient_checkpointing=True,
+            gradient_checkpointing_kwargs={"use_reentrant": True},
+        )
+        model_config = ModelConfig()
+
+        args = get_training_arguments(training_config, model_config)
+
+        assert args.gradient_checkpointing_kwargs == {"use_reentrant": True}
+
+    def test_training_arguments_wandb_settings(self):
+        """Test TrainingArguments with wandb settings."""
+        training_config = TrainingConfig(
+            output_dir="./test-output",
+            report_to="wandb",
+            wandb_run_name="test-run",
+        )
+        model_config = ModelConfig()
+
+        args = get_training_arguments(training_config, model_config)
+
+        # report_to is converted to a list
+        assert "wandb" in args.report_to
+        assert args.run_name == "test-run"
+
+
+class TestComputeMetricsForClassification:
+    """Tests for compute_metrics_for_classification function."""
+
+    def test_perfect_accuracy(self):
+        """Test 100% accuracy case."""
+        logits = np.array([[0.1, 0.9], [0.9, 0.1], [0.1, 0.9]])
+        labels = np.array([1, 0, 1])
+
+        class MockEvalPred:
+            def __init__(self, predictions, label_ids):
+                self.predictions = predictions
+                self.label_ids = label_ids
+
+            def __iter__(self):
+                return iter([self.predictions, self.label_ids])
+
+        eval_pred = MockEvalPred(logits, labels)
+        result = compute_metrics_for_classification(eval_pred)
+
+        assert "accuracy" in result
+        assert result["accuracy"] == 1.0
+
+    def test_zero_accuracy(self):
+        """Test 0% accuracy case."""
+        logits = np.array([[0.9, 0.1], [0.1, 0.9], [0.9, 0.1]])
+        labels = np.array([1, 0, 1])
+
+        class MockEvalPred:
+            def __init__(self, predictions, label_ids):
+                self.predictions = predictions
+                self.label_ids = label_ids
+
+            def __iter__(self):
+                return iter([self.predictions, self.label_ids])
+
+        eval_pred = MockEvalPred(logits, labels)
+        result = compute_metrics_for_classification(eval_pred)
+
+        assert result["accuracy"] == 0.0
+
+    def test_partial_accuracy(self):
+        """Test partial accuracy case."""
+        logits = np.array([[0.1, 0.9], [0.1, 0.9], [0.1, 0.9], [0.9, 0.1]])
+        labels = np.array([1, 0, 1, 0])
+
+        class MockEvalPred:
+            def __init__(self, predictions, label_ids):
+                self.predictions = predictions
+                self.label_ids = label_ids
+
+            def __iter__(self):
+                return iter([self.predictions, self.label_ids])
+
+        eval_pred = MockEvalPred(logits, labels)
+        result = compute_metrics_for_classification(eval_pred)
+
+        assert result["accuracy"] == 0.75
+
+
+class TestComputeMetricsForLM:
+    """Tests for compute_metrics_for_lm function."""
+
+    def test_perplexity_computation(self):
+        """Test perplexity is computed correctly."""
+        # Create simple logits and labels
+        vocab_size = 10
+        seq_len = 5
+        batch_size = 2
+
+        # Random logits
+        np.random.seed(42)
+        logits = np.random.randn(batch_size, seq_len, vocab_size)
+        labels = np.random.randint(0, vocab_size, (batch_size, seq_len))
+
+        class MockEvalPred:
+            def __init__(self, predictions, label_ids):
+                self.predictions = predictions
+                self.label_ids = label_ids
+
+            def __iter__(self):
+                return iter([self.predictions, self.label_ids])
+
+        eval_pred = MockEvalPred(logits, labels)
+        result = compute_metrics_for_lm(eval_pred)
+
+        assert "perplexity" in result
+        assert result["perplexity"] > 0
+        assert not np.isinf(result["perplexity"])
+
+    def test_perplexity_with_padding(self):
+        """Test perplexity handles padding tokens (-100)."""
+        vocab_size = 10
+        seq_len = 5
+        batch_size = 2
+
+        np.random.seed(42)
+        logits = np.random.randn(batch_size, seq_len, vocab_size)
+        labels = np.array([[1, 2, 3, -100, -100], [1, 2, -100, -100, -100]])
+
+        class MockEvalPred:
+            def __init__(self, predictions, label_ids):
+                self.predictions = predictions
+                self.label_ids = label_ids
+
+            def __iter__(self):
+                return iter([self.predictions, self.label_ids])
+
+        eval_pred = MockEvalPred(logits, labels)
+        result = compute_metrics_for_lm(eval_pred)
+
+        assert "perplexity" in result
+        assert result["perplexity"] > 0
+
+    def test_perplexity_all_padding(self):
+        """Test perplexity with all padding tokens returns inf."""
+        vocab_size = 10
+        seq_len = 5
+        batch_size = 2
+
+        logits = np.random.randn(batch_size, seq_len, vocab_size)
+        labels = np.full((batch_size, seq_len), -100)
+
+        class MockEvalPred:
+            def __init__(self, predictions, label_ids):
+                self.predictions = predictions
+                self.label_ids = label_ids
+
+            def __iter__(self):
+                return iter([self.predictions, self.label_ids])
+
+        eval_pred = MockEvalPred(logits, labels)
+        result = compute_metrics_for_lm(eval_pred)
+
+        assert result["perplexity"] == float("inf")
+
+
+class TestLoraTrainer:
+    """Tests for LoraTrainer class."""
+
+    def test_lora_trainer_initialization(self):
+        """Test LoraTrainer can be initialized."""
+        from transformers import TrainingArguments
+
+        model = nn.Linear(10, 5)
+        args = TrainingArguments(
+            output_dir="./test-output",
+            num_train_epochs=1,
+            per_device_train_batch_size=1,
+            report_to="none",
+        )
+
+        # Create simple dataset
+        class SimpleDataset(torch.utils.data.Dataset):
+            def __len__(self):
+                return 10
+
+            def __getitem__(self, idx):
+                return {"input_ids": torch.tensor([1, 2, 3]), "labels": torch.tensor([1, 2, 3])}
+
+        train_dataset = SimpleDataset()
+
+        trainer = LoraTrainer(
+            model=model,
+            args=args,
+            train_dataset=train_dataset,
+        )
+
+        assert trainer is not None
+        assert trainer.model is model
+
+    def test_lora_trainer_compute_loss(self):
+        """Test that compute_loss delegates to parent."""
+        from transformers import TrainingArguments
+
+        model = nn.Linear(10, 5)
+        args = TrainingArguments(
+            output_dir="./test-output",
+            num_train_epochs=1,
+            per_device_train_batch_size=1,
+            report_to="none",
+        )
+
+        trainer = LoraTrainer(
+            model=model,
+            args=args,
+            train_dataset=None,
+        )
+
+        # Just verify the method exists and is callable
+        assert hasattr(trainer, "compute_loss")
+        assert callable(trainer.compute_loss)
