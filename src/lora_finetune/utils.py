@@ -55,6 +55,24 @@ def suppress_warnings() -> None:
     # Suppress tokenizer parallelism warning
     os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
+    # Disable HuggingFace tqdm progress bars (we use Rich instead)
+    os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
+
+    # Disable transformers/datasets tqdm bars via their logging API
+    try:
+        from transformers.utils.logging import disable_progress_bar as tf_disable_progress_bar
+
+        tf_disable_progress_bar()
+    except ImportError:
+        pass
+
+    try:
+        from datasets.utils.logging import disable_progress_bar as ds_disable_progress_bar
+
+        ds_disable_progress_bar()
+    except ImportError:
+        pass
+
     # Replace transformers logger handlers with our Rich handler
     transformers_logger = logging.getLogger("transformers")
     transformers_logger.handlers = [RichWarningHandler()]

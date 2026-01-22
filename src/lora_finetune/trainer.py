@@ -564,8 +564,13 @@ def create_trainer(
         f"Training args: epochs={training_args.num_train_epochs}, batch_size={training_args.per_device_train_batch_size}, lr={training_args.learning_rate}"
     )
 
-    trainer_callbacks = [RichProgressCallback()]
+    rich_progress_callback = RichProgressCallback()
+    trainer_callbacks = [rich_progress_callback]
     if callbacks:
+        # Pass RichProgressCallback reference to GSM8KCallback for progress integration
+        for cb in callbacks:
+            if cb.__class__.__name__ == "GSM8KCallback":
+                cb.rich_progress_callback = rich_progress_callback
         trainer_callbacks.extend(callbacks)
 
     # Disable default transformers progress bar (we use Rich instead)
