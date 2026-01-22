@@ -9,7 +9,6 @@ from torch import nn
 from lora_finetune.config import ModelConfig, TrainingConfig
 from lora_finetune.trainer import (
     LoraTrainer,
-    WandbCallback,
     compute_metrics_for_classification,
     compute_metrics_for_lm,
     enable_gradient_checkpointing,
@@ -108,26 +107,6 @@ class TestGetTrainingArguments:
         assert training_config.save_steps == 100
         assert training_config.save_total_limit == 5
         assert training_config.save_strategy == "steps"
-
-
-class TestWandbCallback:
-    """Tests for WandbCallback class."""
-
-    def test_callback_initialization(self):
-        """Test callback initialization."""
-        config = TrainingConfig(report_to="wandb")
-        callback = WandbCallback(config)
-
-        assert callback.config == config
-        assert callback._wandb is None
-
-    def test_callback_setup_without_wandb(self):
-        """Test callback setup when wandb is not available."""
-        config = TrainingConfig(report_to="none")
-        callback = WandbCallback(config)
-
-        callback.setup(None, None, None)
-        assert callback._wandb is None
 
 
 class TestEnableGradientCheckpointing:

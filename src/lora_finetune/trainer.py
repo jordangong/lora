@@ -236,53 +236,6 @@ class RichProgressCallback(TrainerCallback):
         )
 
 
-class WandbCallback(TrainerCallback):
-    """Custom callback for enhanced wandb logging."""
-
-    def __init__(self, config: TrainingConfig):
-        self.config = config
-        self._wandb = None
-
-    def setup(self, args, state, model, **kwargs):
-        """Setup wandb if enabled."""
-        if self.config.report_to == "wandb":
-            try:
-                import wandb
-
-                self._wandb = wandb
-            except ImportError:
-                logger.warning("wandb not installed, skipping wandb logging")
-
-    def on_train_begin(self, args, state, control, model=None, **kwargs):
-        """Log model config at training start."""
-        if self._wandb is None or not self._wandb.run:
-            return
-
-        if isinstance(model, PeftModel):
-            peft_config = model.peft_config
-            self._wandb.config.update({"peft_config": str(peft_config)})
-
-    def on_log(self, args, state, control, logs=None, **kwargs):
-        """Enhanced logging with additional metrics."""
-        if self._wandb is None or not self._wandb.run or logs is None:
-            return
-
-        if "grad_norm" in logs:
-            self._wandb.log({"train/grad_norm": logs["grad_norm"]}, step=state.global_step)
-
-    def on_train_end(self, args, state, control, **kwargs):
-        """Log final metrics."""
-        if self._wandb is None or not self._wandb.run:
-            return
-
-        self._wandb.log(
-            {
-                "train/total_steps": state.global_step,
-                "train/total_epochs": state.epoch,
-            }
-        )
-
-
 def get_training_arguments(
     config: TrainingConfig,
     model_config: ModelConfig,
@@ -524,8 +477,6 @@ def create_trainer(
     )
 
     callbacks = [RichProgressCallback()]
-    if training_config.report_to == "wandb":
-        callbacks.append(WandbCallback(training_config))
 
     # Disable default transformers progress bar (we use Rich instead)
     training_args.disable_tqdm = True
