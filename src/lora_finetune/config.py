@@ -262,7 +262,7 @@ class DataConfig:
     )
     eval_split_ratio: Optional[float] = field(
         default=None,
-        metadata={"help": "Ratio of training data to use for evaluation (e.g., 0.1 for 10%)"},
+        metadata={"help": "Ratio of training data to use for evaluation (e.g., 0.1 for 10%%)"},
     )
     eval_dataset_name: Optional[str] = field(
         default=None,
@@ -283,6 +283,28 @@ class DataConfig:
         default=None, metadata={"help": "Prompt template for text formatting"}
     )
     augmentation: AugmentationConfig = field(default_factory=AugmentationConfig)
+
+
+@dataclass
+class BenchmarkEvalConfig:
+    """Configuration for benchmark evaluation (e.g., GSM8K accuracy)."""
+
+    enabled: bool = field(
+        default=False, metadata={"help": "Enable benchmark evaluation during training"}
+    )
+    benchmark: str = field(
+        default="gsm8k", metadata={"help": "Benchmark to evaluate on: gsm8k, etc."}
+    )
+    eval_steps: int = field(
+        default=500, metadata={"help": "Run benchmark evaluation every N steps"}
+    )
+    num_samples: Optional[int] = field(
+        default=100, metadata={"help": "Number of samples to evaluate (None for all)"}
+    )
+    max_new_tokens: int = field(
+        default=512, metadata={"help": "Maximum new tokens to generate for evaluation"}
+    )
+    batch_size: int = field(default=1, metadata={"help": "Batch size for benchmark evaluation"})
 
 
 @dataclass
@@ -324,6 +346,10 @@ class TrainingConfig:
     eval_steps: int = field(default=500, metadata={"help": "Evaluate every N steps"})
     eval_strategy: str = field(
         default="steps", metadata={"help": "Evaluation strategy: no, steps, or epoch"}
+    )
+    prediction_loss_only: bool = field(
+        default=False,
+        metadata={"help": "Only compute loss during eval (don't store logits to save memory)"},
     )
     save_strategy: str = field(
         default="steps", metadata={"help": "Save strategy: no, steps, or epoch"}
@@ -399,6 +425,7 @@ class Config:
     lora: LoraConfig = field(default_factory=LoraConfig)
     data: DataConfig = field(default_factory=DataConfig)
     training: TrainingConfig = field(default_factory=TrainingConfig)
+    benchmark_eval: BenchmarkEvalConfig = field(default_factory=BenchmarkEvalConfig)
 
     @classmethod
     def from_yaml(cls, path: str) -> "Config":
@@ -416,12 +443,14 @@ class Config:
         data_config = DataConfig(**data_dict, augmentation=aug_config)
 
         training_config = TrainingConfig(**config_dict.get("training", {}))
+        benchmark_eval_config = BenchmarkEvalConfig(**config_dict.get("benchmark_eval", {}))
 
         return cls(
             model=model_config,
             lora=lora_config,
             data=data_config,
             training=training_config,
+            benchmark_eval=benchmark_eval_config,
         )
 
     def to_yaml(self, path: str) -> None:
@@ -433,6 +462,7 @@ class Config:
             "lora": self.lora.__dict__,
             "data": data_dict,
             "training": self.training.__dict__,
+            "benchmark_eval": self.benchmark_eval.__dict__,
         }
         with open(path, "w") as f:
             yaml.dump(config_dict, f, default_flow_style=False)
@@ -442,7 +472,7 @@ class Config:
         for key, value in args.items():
             if value is None:
                 continue
-            for config_name in ["model", "lora", "data", "training"]:
+            for config_name in ["model", "lora", "data", "training", "benchmark_eval"]:
                 config_obj = getattr(self, config_name)
                 if hasattr(config_obj, key):
                     setattr(config_obj, key, value)

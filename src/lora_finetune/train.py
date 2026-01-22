@@ -9,9 +9,10 @@ from rich.table import Table
 from transformers import set_seed as hf_set_seed
 
 from .cli import build_config, parse_args
-from .config import Config
+from .config import BenchmarkEvalConfig, Config
 from .data.text_data import get_text_collator, load_text_dataset, preprocess_text_dataset
 from .data.vision_data import get_vision_collator, load_vision_dataset, preprocess_vision_dataset
+from .evaluators import GSM8KCallback, GSM8KEvaluator
 from .models.base import get_peft_model_with_lora, load_model_and_tokenizer
 from .models.llm import get_llm_target_modules
 from .models.vision import get_num_labels_from_dataset, get_vision_target_modules
@@ -31,6 +32,32 @@ from .utils import (
 
 console = Console()
 logger = logging.getLogger(__name__)
+
+
+def run_benchmark_eval(model, tokenizer, eval_config: BenchmarkEvalConfig) -> None:
+    """Run benchmark evaluation after training."""
+    console.print(Panel("[bold blue]Running Benchmark Evaluation[/bold blue]"))
+
+    if eval_config.benchmark == "gsm8k":
+        evaluator = GSM8KEvaluator(
+            model=model,
+            tokenizer=tokenizer,
+            max_new_tokens=eval_config.max_new_tokens,
+            batch_size=eval_config.batch_size,
+            num_samples=eval_config.num_samples,
+        )
+        results = evaluator.evaluate(split="test")
+
+        # Display results
+        table = Table(title="GSM8K Evaluation Results")
+        table.add_column("Metric", style="cyan")
+        table.add_column("Value", style="green")
+        table.add_row("Accuracy", f"{results['accuracy']:.2%}")
+        table.add_row("Correct", str(results["correct"]))
+        table.add_row("Total", str(results["total"]))
+        console.print(table)
+    else:
+        logger.warning(f"Unknown benchmark: {eval_config.benchmark}")
 
 
 def train_llm(config: Config) -> None:
@@ -72,6 +99,19 @@ def train_llm(config: Config) -> None:
     # Use perplexity metric for LLM evaluation if eval dataset exists
     compute_metrics = compute_metrics_for_lm if eval_dataset is not None else None
 
+    # Create benchmark evaluation callback if enabled
+    callbacks = []
+    if config.benchmark_eval.enabled and config.benchmark_eval.benchmark == "gsm8k":
+        gsm8k_callback = GSM8KCallback(
+            tokenizer=tokenizer,
+            eval_steps=config.benchmark_eval.eval_steps,
+            num_samples=config.benchmark_eval.num_samples,
+            max_new_tokens=config.benchmark_eval.max_new_tokens,
+            batch_size=config.benchmark_eval.batch_size,
+        )
+        callbacks.append(gsm8k_callback)
+        logger.info(f"GSM8K benchmark eval enabled every {config.benchmark_eval.eval_steps} steps")
+
     trainer = create_trainer(
         model=model,
         training_config=config.training,
@@ -82,6 +122,7 @@ def train_llm(config: Config) -> None:
         data_collator=data_collator,
         compute_metrics=compute_metrics,
         lora_config=config.lora,
+        callbacks=callbacks if callbacks else None,
     )
 
     trainer.train(resume_from_checkpoint=config.training.resume_from_checkpoint)
@@ -92,6 +133,10 @@ def train_llm(config: Config) -> None:
     if config.training.push_to_hub:
         with Status("[bold blue]Pushing to Hub...", console=console):
             trainer.push_to_hub()
+
+    # Run benchmark evaluation if enabled
+    if config.benchmark_eval.enabled:
+        run_benchmark_eval(model, tokenizer, config.benchmark_eval)
 
 
 def train_vision(config: Config) -> None:

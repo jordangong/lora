@@ -270,6 +270,7 @@ def get_training_arguments(
         save_total_limit=config.save_total_limit,
         eval_steps=config.eval_steps,
         eval_strategy=config.eval_strategy,
+        prediction_loss_only=config.prediction_loss_only,
         save_strategy=config.save_strategy,
         load_best_model_at_end=config.load_best_model_at_end,
         metric_for_best_model=config.metric_for_best_model,
@@ -544,6 +545,7 @@ def create_trainer(
     data_collator: Optional[DataCollator] = None,
     compute_metrics: Optional[Callable[[EvalPrediction], Dict]] = None,
     lora_config: Optional[LoraConfig] = None,
+    callbacks: Optional[List] = None,
 ) -> LoraTrainer:
     """Create trainer with all optimizations configured."""
     wandb_run_name = setup_wandb(training_config)
@@ -562,7 +564,9 @@ def create_trainer(
         f"Training args: epochs={training_args.num_train_epochs}, batch_size={training_args.per_device_train_batch_size}, lr={training_args.learning_rate}"
     )
 
-    callbacks = [RichProgressCallback()]
+    trainer_callbacks = [RichProgressCallback()]
+    if callbacks:
+        trainer_callbacks.extend(callbacks)
 
     # Disable default transformers progress bar (we use Rich instead)
     training_args.disable_tqdm = True
@@ -574,7 +578,7 @@ def create_trainer(
         eval_dataset=eval_dataset,
         processing_class=processing_class,
         data_collator=data_collator,
-        callbacks=callbacks,
+        callbacks=trainer_callbacks,
         compute_metrics=compute_metrics,
         lora_config=lora_config,
     )

@@ -35,12 +35,22 @@ data:
   max_seq_length: 2048
   preprocessing_num_workers: 4
   train_split: train
-  # Option 1: Use holdout dataset for zero-shot eval
-  eval_dataset_name: gsm8k
-  eval_dataset_config_name: main
-  eval_dataset_split: test
-  # Option 2: Split training data (uncomment if no holdout dataset)
-  # eval_split_ratio: 0.05
+  # For loss-based eval during training, use one of these options:
+  # Option 1: Split training data for validation loss
+  eval_split_ratio: 0.05
+  # Option 2: Use a separate holdout dataset for validation loss
+  # eval_dataset_name: some_dataset
+  # eval_dataset_config_name: main
+  # eval_dataset_split: validation
+
+# Benchmark evaluation (generation-based, runs during training)
+benchmark_eval:
+  enabled: true
+  benchmark: gsm8k
+  eval_steps: 500  # Run GSM8K accuracy eval every N steps
+  num_samples: 100  # Use subset for faster eval during training
+  max_new_tokens: 512
+  batch_size: 8
 
 training:
   output_dir: ./outputs/llama3-loraplus
@@ -56,6 +66,7 @@ training:
   logging_steps: 10
   save_steps: 500
   save_total_limit: 3
+  prediction_loss_only: true
   bf16: true
   fp16: false
   gradient_checkpointing: true

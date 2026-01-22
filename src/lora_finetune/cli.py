@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional, Type, Union, get_args, get_origin
 
 from .config import (
     AugmentationConfig,
+    BenchmarkEvalConfig,
     Config,
     DataConfig,
     LoraConfig,
@@ -184,6 +185,9 @@ def parse_args() -> argparse.Namespace:
     # Training config
     _add_dataclass_args(parser, TrainingConfig)
 
+    # Benchmark evaluation config with "bench_" prefix
+    _add_dataclass_args(parser, BenchmarkEvalConfig, prefix="bench_")
+
     return parser.parse_args()
 
 
@@ -240,5 +244,6 @@ def build_config(args: argparse.Namespace) -> Config:
     _apply_args_to_config(config.data, args_dict)
     _apply_args_to_config(config.data.augmentation, args_dict, prefix="aug_")
     _apply_args_to_config(config.training, args_dict)
+    _apply_args_to_config(config.benchmark_eval, args_dict, prefix="bench_")
 
     return config
