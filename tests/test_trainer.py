@@ -9,9 +9,12 @@ from torch import nn
 from lora_finetune.config import LoraConfig, ModelConfig, TrainingConfig
 from lora_finetune.trainer import (
     LoraTrainer,
+    RichProgressCallback,
     compute_metrics_for_classification,
     compute_metrics_for_lm,
+    create_trainer,
     enable_gradient_checkpointing,
+    generate_run_id,
     get_training_arguments,
     prepare_model_for_training,
 )
@@ -115,11 +118,15 @@ class TestEnableGradientCheckpointing:
     def test_enable_with_gradient_checkpointing_method(self):
         """Test enabling gradient checkpointing on model with the method."""
 
+        class MockConfig:
+            use_cache = True
+
         class MockModel(nn.Module):
             def __init__(self):
                 super().__init__()
                 self.linear = nn.Linear(10, 5)
                 self._gradient_checkpointing_enabled = False
+                self.config = MockConfig()
 
             def gradient_checkpointing_enable(self, gradient_checkpointing_kwargs=None):
                 self._gradient_checkpointing_enabled = True
@@ -128,6 +135,7 @@ class TestEnableGradientCheckpointing:
         result = enable_gradient_checkpointing(model)
 
         assert result._gradient_checkpointing_enabled is True
+        assert result.config.use_cache is False
 
     def test_enable_with_input_require_grads(self):
         """Test enabling gradient checkpointing via enable_input_require_grads."""
@@ -153,11 +161,15 @@ class TestPrepareModelForTraining:
     def test_prepare_with_gradient_checkpointing(self):
         """Test preparing model with gradient checkpointing enabled."""
 
+        class MockConfig:
+            use_cache = True
+
         class MockModel(nn.Module):
             def __init__(self):
                 super().__init__()
                 self.linear = nn.Linear(10, 5)
                 self._gc_enabled = False
+                self.config = MockConfig()
 
             def gradient_checkpointing_enable(self, gradient_checkpointing_kwargs=None):
                 self._gc_enabled = True
@@ -168,6 +180,7 @@ class TestPrepareModelForTraining:
         result = prepare_model_for_training(model, config)
 
         assert result._gc_enabled is True
+        assert result.config.use_cache is False
 
     def test_prepare_without_gradient_checkpointing(self):
         """Test preparing model without gradient checkpointing."""
@@ -585,3 +598,272 @@ class TestLoraTrainer:
 
         assert hasattr(trainer, "_create_loraplus_optimizer")
         assert callable(trainer._create_loraplus_optimizer)
+
+    def test_lora_trainer_save_model_method_exists(self):
+        """Test that save_model method exists."""
+        from transformers import TrainingArguments
+
+        model = nn.Linear(10, 5)
+        args = TrainingArguments(
+            output_dir="./test-output",
+            num_train_epochs=1,
+            per_device_train_batch_size=1,
+            report_to="none",
+        )
+
+        trainer = LoraTrainer(
+            model=model,
+            args=args,
+            train_dataset=None,
+        )
+
+        assert hasattr(trainer, "save_model")
+        assert callable(trainer.save_model)
+
+    def test_lora_trainer_evaluation_loop_method_exists(self):
+        """Test that evaluation_loop method exists."""
+        from transformers import TrainingArguments
+
+        model = nn.Linear(10, 5)
+        args = TrainingArguments(
+            output_dir="./test-output",
+            num_train_epochs=1,
+            per_device_train_batch_size=1,
+            report_to="none",
+        )
+
+        trainer = LoraTrainer(
+            model=model,
+            args=args,
+            train_dataset=None,
+        )
+
+        assert hasattr(trainer, "evaluation_loop")
+        assert callable(trainer.evaluation_loop)
+
+
+class TestGenerateRunId:
+    """Tests for generate_run_id function."""
+
+    def test_returns_string(self):
+        """Test that generate_run_id returns a string."""
+        run_id = generate_run_id()
+        assert isinstance(run_id, str)
+
+    def test_format_timestamp(self):
+        """Test that run_id has timestamp format."""
+        run_id = generate_run_id()
+        # Format should be YYYYMMDD_HHMMSS (15 chars)
+        assert len(run_id) == 15
+        assert run_id[8] == "_"
+        # Should be numeric except for underscore
+        assert run_id[:8].isdigit()
+        assert run_id[9:].isdigit()
+
+    def test_unique_ids(self):
+        """Test that consecutive calls produce different IDs (with small delay)."""
+        import time
+
+        run_id1 = generate_run_id()
+        time.sleep(1.1)  # Wait for at least 1 second difference
+        run_id2 = generate_run_id()
+        assert run_id1 != run_id2
+
+
+class TestRichProgressCallback:
+    """Tests for RichProgressCallback class."""
+
+    def test_initialization(self):
+        """Test RichProgressCallback initialization."""
+        callback = RichProgressCallback()
+
+        assert callback.progress is None
+        assert callback.train_task is None
+        assert callback.eval_task is None
+        assert callback.max_epochs == 1
+        assert callback.in_eval is False
+
+    def test_has_required_methods(self):
+        """Test that callback has all required TrainerCallback methods."""
+        callback = RichProgressCallback()
+
+        assert hasattr(callback, "on_train_begin")
+        assert hasattr(callback, "on_step_end")
+        assert hasattr(callback, "on_log")
+        assert hasattr(callback, "on_evaluate")
+        assert hasattr(callback, "on_train_end")
+        assert hasattr(callback, "_start_eval_progress")
+
+    def test_start_eval_progress_without_progress(self):
+        """Test _start_eval_progress when progress is None."""
+        callback = RichProgressCallback()
+        # Should not raise when progress is None
+        callback._start_eval_progress(10)
+        assert callback.eval_task is None
+
+
+class TestCreateTrainer:
+    """Tests for create_trainer function."""
+
+    def test_create_trainer_returns_lora_trainer(self):
+        """Test that create_trainer returns a LoraTrainer instance."""
+        model = nn.Linear(10, 5)
+        training_config = TrainingConfig(
+            output_dir="./test-output",
+            eval_strategy="no",
+            load_best_model_at_end=False,
+            report_to="none",
+        )
+        model_config = ModelConfig()
+
+        class SimpleDataset(torch.utils.data.Dataset):
+            def __len__(self):
+                return 10
+
+            def __getitem__(self, idx):
+                return {"input_ids": torch.tensor([1, 2, 3]), "labels": torch.tensor([1, 2, 3])}
+
+        train_dataset = SimpleDataset()
+
+        trainer = create_trainer(
+            model=model,
+            training_config=training_config,
+            model_config=model_config,
+            train_dataset=train_dataset,
+        )
+
+        assert isinstance(trainer, LoraTrainer)
+
+    def test_create_trainer_with_lora_config(self):
+        """Test create_trainer with LoRA config."""
+        model = nn.Linear(10, 5)
+        training_config = TrainingConfig(
+            output_dir="./test-output",
+            eval_strategy="no",
+            load_best_model_at_end=False,
+            report_to="none",
+        )
+        model_config = ModelConfig()
+        lora_config = LoraConfig(method="lora", r=16)
+
+        class SimpleDataset(torch.utils.data.Dataset):
+            def __len__(self):
+                return 10
+
+            def __getitem__(self, idx):
+                return {"input_ids": torch.tensor([1, 2, 3]), "labels": torch.tensor([1, 2, 3])}
+
+        train_dataset = SimpleDataset()
+
+        trainer = create_trainer(
+            model=model,
+            training_config=training_config,
+            model_config=model_config,
+            train_dataset=train_dataset,
+            lora_config=lora_config,
+        )
+
+        assert trainer.lora_config is lora_config
+
+    def test_create_trainer_has_rich_callback(self):
+        """Test that create_trainer adds RichProgressCallback."""
+        model = nn.Linear(10, 5)
+        training_config = TrainingConfig(
+            output_dir="./test-output",
+            eval_strategy="no",
+            load_best_model_at_end=False,
+            report_to="none",
+        )
+        model_config = ModelConfig()
+
+        class SimpleDataset(torch.utils.data.Dataset):
+            def __len__(self):
+                return 10
+
+            def __getitem__(self, idx):
+                return {"input_ids": torch.tensor([1, 2, 3]), "labels": torch.tensor([1, 2, 3])}
+
+        train_dataset = SimpleDataset()
+
+        trainer = create_trainer(
+            model=model,
+            training_config=training_config,
+            model_config=model_config,
+            train_dataset=train_dataset,
+        )
+
+        # Check that RichProgressCallback is in the callbacks
+        callback_types = [type(cb).__name__ for cb in trainer.callback_handler.callbacks]
+        assert "RichProgressCallback" in callback_types
+
+    def test_create_trainer_disables_tqdm(self):
+        """Test that create_trainer disables tqdm."""
+        model = nn.Linear(10, 5)
+        training_config = TrainingConfig(
+            output_dir="./test-output",
+            eval_strategy="no",
+            load_best_model_at_end=False,
+            report_to="none",
+        )
+        model_config = ModelConfig()
+
+        class SimpleDataset(torch.utils.data.Dataset):
+            def __len__(self):
+                return 10
+
+            def __getitem__(self, idx):
+                return {"input_ids": torch.tensor([1, 2, 3]), "labels": torch.tensor([1, 2, 3])}
+
+        train_dataset = SimpleDataset()
+
+        trainer = create_trainer(
+            model=model,
+            training_config=training_config,
+            model_config=model_config,
+            train_dataset=train_dataset,
+        )
+
+        assert trainer.args.disable_tqdm is True
+
+
+class TestPrepareModelWithTokenizer:
+    """Tests for prepare_model_for_training with tokenizer parameter."""
+
+    def test_prepare_with_tokenizer_sets_pad_token_id(self):
+        """Test that prepare_model_for_training syncs pad_token_id with tokenizer."""
+
+        class MockConfig:
+            use_cache = True
+            pad_token_id = None
+
+        class MockGenerationConfig:
+            pad_token_id = None
+
+        class MockModel(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.linear = nn.Linear(10, 5)
+                self.config = MockConfig()
+                self.generation_config = MockGenerationConfig()
+
+        class MockTokenizer:
+            pad_token_id = 42
+
+        model = MockModel()
+        tokenizer = MockTokenizer()
+        config = TrainingConfig(gradient_checkpointing=False)
+
+        result = prepare_model_for_training(model, config, tokenizer=tokenizer)
+
+        assert result.config.pad_token_id == 42
+        assert result.generation_config.pad_token_id == 42
+
+    def test_prepare_without_tokenizer(self):
+        """Test that prepare_model_for_training works without tokenizer."""
+        model = nn.Linear(10, 5)
+        config = TrainingConfig(gradient_checkpointing=False)
+
+        result = prepare_model_for_training(model, config, tokenizer=None)
+
+        # Should not raise and return the model
+        assert result is not None
