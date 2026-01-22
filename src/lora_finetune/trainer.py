@@ -2,6 +2,7 @@
 
 import logging
 import os
+from datetime import datetime
 from typing import Callable, Dict, List, Optional, Union
 
 import numpy as np
@@ -306,16 +307,21 @@ def get_training_arguments(
     return training_args
 
 
-def setup_wandb(config: TrainingConfig) -> None:
-    """Setup wandb logging."""
+def generate_run_id() -> str:
+    """Generate a unique run ID based on timestamp."""
+    return datetime.now().strftime("%Y%m%d_%H%M%S")
+
+
+def setup_wandb(config: TrainingConfig) -> Optional[str]:
+    """Setup wandb logging and return run name for output directory."""
     if config.report_to != "wandb":
-        return
+        return None
 
     try:
         import wandb
     except ImportError:
         logger.warning("wandb not installed. Install with: pip install wandb")
-        return
+        return None
 
     if wandb.run is None:
         wandb.init(
@@ -335,6 +341,8 @@ def setup_wandb(config: TrainingConfig) -> None:
 
     if config.wandb_log_model:
         os.environ["WANDB_LOG_MODEL"] = "true"
+
+    return wandb.run.name if wandb.run else None
 
 
 class LoraTrainer(Trainer):
@@ -464,12 +472,16 @@ def create_trainer(
     compute_metrics: Optional[Callable[[EvalPrediction], Dict]] = None,
 ) -> LoraTrainer:
     """Create trainer with all optimizations configured."""
+    wandb_run_name = setup_wandb(training_config)
+
+    # Generate unique run identifier for output directory
+    run_id = wandb_run_name if wandb_run_name else generate_run_id()
+    training_config.output_dir = os.path.join(training_config.output_dir, run_id)
+
     logger.info(f"Creating trainer with output_dir={training_config.output_dir}")
     logger.info(f"Train dataset size: {len(train_dataset)}")
     if eval_dataset:
         logger.info(f"Eval dataset size: {len(eval_dataset)}")
-
-    setup_wandb(training_config)
 
     training_args = get_training_arguments(training_config, model_config)
     logger.info(
