@@ -128,6 +128,92 @@ class TestAddDataclassArgs:
         args = parser.parse_args(["--lora_target_modules", "q_proj", "v_proj"])
         assert args.lora_target_modules == ["q_proj", "v_proj"]
 
+    def test_add_lora_method_arg(self):
+        """Test adding method argument for finetuning method selection."""
+        parser = argparse.ArgumentParser()
+        _add_dataclass_args(parser, LoraConfig, prefix="lora_")
+
+        # Test lora method
+        args = parser.parse_args(["--lora_method", "lora"])
+        assert args.lora_method == "lora"
+
+        # Test full finetuning method
+        args = parser.parse_args(["--lora_method", "full"])
+        assert args.lora_method == "full"
+
+        # Test dora method
+        args = parser.parse_args(["--lora_method", "dora"])
+        assert args.lora_method == "dora"
+
+    def test_add_adalora_args(self):
+        """Test AdaLoRA-specific arguments."""
+        parser = argparse.ArgumentParser()
+        _add_dataclass_args(parser, LoraConfig, prefix="lora_")
+
+        args = parser.parse_args(
+            [
+                "--lora_method",
+                "adalora",
+                "--lora_init_r",
+                "12",
+                "--lora_target_r",
+                "8",
+            ]
+        )
+        assert args.lora_method == "adalora"
+        assert args.lora_init_r == 12
+        assert args.lora_target_r == 8
+
+    def test_add_loraplus_args(self):
+        """Test LoRA+ specific arguments."""
+        parser = argparse.ArgumentParser()
+        _add_dataclass_args(parser, LoraConfig, prefix="lora_")
+
+        args = parser.parse_args(
+            [
+                "--lora_method",
+                "loraplus",
+                "--lora_loraplus_lr_ratio",
+                "16.0",
+            ]
+        )
+        assert args.lora_method == "loraplus"
+        assert args.lora_loraplus_lr_ratio == 16.0
+
+    def test_add_prefix_tuning_args(self):
+        """Test prefix tuning specific arguments."""
+        parser = argparse.ArgumentParser()
+        _add_dataclass_args(parser, LoraConfig, prefix="lora_")
+
+        args = parser.parse_args(
+            [
+                "--lora_method",
+                "prefix_tuning",
+                "--lora_num_virtual_tokens",
+                "30",
+                "--lora_prefix_projection",
+            ]
+        )
+        assert args.lora_method == "prefix_tuning"
+        assert args.lora_num_virtual_tokens == 30
+        assert args.lora_prefix_projection is True
+
+    def test_add_dora_flag(self):
+        """Test DoRA flag argument."""
+        parser = argparse.ArgumentParser()
+        _add_dataclass_args(parser, LoraConfig, prefix="lora_")
+
+        args = parser.parse_args(["--lora_use_dora"])
+        assert args.lora_use_dora is True
+
+    def test_add_rslora_flag(self):
+        """Test RSLoRA flag argument."""
+        parser = argparse.ArgumentParser()
+        _add_dataclass_args(parser, LoraConfig, prefix="lora_")
+
+        args = parser.parse_args(["--lora_use_rslora"])
+        assert args.lora_use_rslora is True
+
 
 class TestApplyArgsToConfig:
     """Tests for _apply_args_to_config function."""

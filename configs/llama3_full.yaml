@@ -1,29 +1,19 @@
+# Full finetuning configuration for Llama 3
+# All model parameters are trained (no PEFT adapter)
+# Note: Requires significantly more GPU memory than LoRA
+
 model:
   model_name_or_path: meta-llama/Meta-Llama-3-8B
   model_type: causal_lm
   torch_dtype: bfloat16
   trust_remote_code: false
   use_flash_attention_2: true
+  # Full finetuning is NOT compatible with quantization
   load_in_4bit: false
   load_in_8bit: false
-  bnb_4bit_compute_dtype: bfloat16
-  bnb_4bit_quant_type: nf4
-  bnb_4bit_use_double_quant: true
 
 lora:
-  method: lora
-  r: 16
-  alpha: 32
-  dropout: 0.05
-  target_modules:
-    - q_proj
-    - k_proj
-    - v_proj
-    - o_proj
-    - gate_proj
-    - up_proj
-    - down_proj
-  bias: none
+  method: full
 
 data:
   dataset_name: tatsu-lab/alpaca
@@ -33,19 +23,19 @@ data:
   train_split: train
 
 training:
-  output_dir: ./outputs/llama3-lora
+  output_dir: ./outputs/llama3-full
   num_train_epochs: 3
-  per_device_train_batch_size: 4
-  per_device_eval_batch_size: 4
-  gradient_accumulation_steps: 4
-  learning_rate: 2.0e-4
+  per_device_train_batch_size: 1
+  per_device_eval_batch_size: 1
+  gradient_accumulation_steps: 16
+  learning_rate: 2.0e-5
   weight_decay: 0.01
   warmup_ratio: 0.03
   max_grad_norm: 1.0
   lr_scheduler_type: cosine
   logging_steps: 10
   save_steps: 500
-  save_total_limit: 3
+  save_total_limit: 2
   bf16: true
   fp16: false
   gradient_checkpointing: true
@@ -53,4 +43,4 @@ training:
   seed: 42
   dataloader_num_workers: 4
   report_to: wandb
-  wandb_project: llama3-lora-finetune
+  wandb_project: llama3-full-finetune

@@ -1,3 +1,7 @@
+# AdaLoRA (Adaptive Low-Rank Adaptation) configuration for Llama 3
+# AdaLoRA dynamically allocates parameter budget based on importance scores
+# Starts with higher rank and prunes to target rank during training
+
 model:
   model_name_or_path: meta-llama/Meta-Llama-3-8B
   model_type: causal_lm
@@ -6,12 +10,9 @@ model:
   use_flash_attention_2: true
   load_in_4bit: false
   load_in_8bit: false
-  bnb_4bit_compute_dtype: bfloat16
-  bnb_4bit_quant_type: nf4
-  bnb_4bit_use_double_quant: true
 
 lora:
-  method: lora
+  method: adalora
   r: 16
   alpha: 32
   dropout: 0.05
@@ -24,6 +25,15 @@ lora:
     - up_proj
     - down_proj
   bias: none
+  # AdaLoRA-specific settings
+  init_r: 12
+  target_r: 8
+  tinit: 200
+  tfinal: 1000
+  deltaT: 10
+  beta1: 0.85
+  beta2: 0.85
+  orth_reg_weight: 0.5
 
 data:
   dataset_name: tatsu-lab/alpaca
@@ -33,7 +43,7 @@ data:
   train_split: train
 
 training:
-  output_dir: ./outputs/llama3-lora
+  output_dir: ./outputs/llama3-adalora
   num_train_epochs: 3
   per_device_train_batch_size: 4
   per_device_eval_batch_size: 4
@@ -53,4 +63,4 @@ training:
   seed: 42
   dataloader_num_workers: 4
   report_to: wandb
-  wandb_project: llama3-lora-finetune
+  wandb_project: llama3-adalora-finetune

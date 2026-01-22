@@ -14,6 +14,22 @@ from rich.table import Table
 
 console = Console()
 
+# Display names for finetuning methods
+METHOD_DISPLAY_NAMES = {
+    "lora": "LoRA",
+    "dora": "DoRA",
+    "adalora": "AdaLoRA",
+    "loraplus": "LoRA+",
+    "ia3": "IA³",
+    "prefix_tuning": "Prefix Tuning",
+    "full": "Full Finetuning",
+}
+
+
+def get_method_display_name(method: str) -> str:
+    """Get the display name for a finetuning method."""
+    return METHOD_DISPLAY_NAMES.get(method, method.upper())
+
 
 class RichWarningHandler(logging.Handler):
     """Custom logging handler that formats warnings elegantly with Rich."""

@@ -21,6 +21,7 @@ class TestLoraConfig:
     def test_default_values(self):
         """Test default LoRA configuration values."""
         config = LoraConfig()
+        assert config.method == "lora"
         assert config.r == 16
         assert config.alpha == 32
         assert config.dropout == 0.05
@@ -53,6 +54,89 @@ class TestLoraConfig:
         assert config.dropout == 0.1
         assert config.bias == "all"
         assert config.task_type == "CAUSAL_LM"
+
+    def test_method_full_finetuning(self):
+        """Test full finetuning method configuration."""
+        config = LoraConfig(method="full")
+        assert config.method == "full"
+
+    def test_method_dora(self):
+        """Test DoRA method configuration."""
+        config = LoraConfig(method="dora")
+        assert config.method == "dora"
+        # DoRA should auto-enable use_dora flag
+        assert config.use_dora is True
+
+    def test_method_dora_explicit_flag(self):
+        """Test DoRA with explicit use_dora flag."""
+        config = LoraConfig(method="lora", use_dora=True)
+        assert config.use_dora is True
+
+    def test_method_adalora(self):
+        """Test AdaLoRA method configuration."""
+        config = LoraConfig(
+            method="adalora",
+            init_r=12,
+            target_r=8,
+            tinit=200,
+            tfinal=1000,
+            deltaT=10,
+            beta1=0.85,
+            beta2=0.85,
+            orth_reg_weight=0.5,
+        )
+        assert config.method == "adalora"
+        assert config.init_r == 12
+        assert config.target_r == 8
+        assert config.tinit == 200
+        assert config.tfinal == 1000
+        assert config.deltaT == 10
+        assert config.beta1 == 0.85
+        assert config.beta2 == 0.85
+        assert config.orth_reg_weight == 0.5
+
+    def test_method_loraplus(self):
+        """Test LoRA+ method configuration."""
+        config = LoraConfig(method="loraplus", loraplus_lr_ratio=16.0)
+        assert config.method == "loraplus"
+        assert config.loraplus_lr_ratio == 16.0
+
+    def test_loraplus_default_lr_ratio(self):
+        """Test LoRA+ default learning rate ratio."""
+        config = LoraConfig(method="loraplus")
+        assert config.loraplus_lr_ratio == 16.0
+
+    def test_method_ia3(self):
+        """Test IA3 method configuration."""
+        config = LoraConfig(
+            method="ia3",
+            target_modules=["k_proj", "v_proj", "down_proj"],
+            feedforward_modules=["down_proj"],
+        )
+        assert config.method == "ia3"
+        assert config.feedforward_modules == ["down_proj"]
+
+    def test_method_prefix_tuning(self):
+        """Test prefix tuning method configuration."""
+        config = LoraConfig(
+            method="prefix_tuning",
+            num_virtual_tokens=20,
+            prefix_projection=True,
+        )
+        assert config.method == "prefix_tuning"
+        assert config.num_virtual_tokens == 20
+        assert config.prefix_projection is True
+
+    def test_prefix_tuning_defaults(self):
+        """Test prefix tuning default values."""
+        config = LoraConfig(method="prefix_tuning")
+        assert config.num_virtual_tokens == 20
+        assert config.prefix_projection is False
+
+    def test_rslora_flag(self):
+        """Test RSLoRA scaling flag."""
+        config = LoraConfig(use_rslora=True)
+        assert config.use_rslora is True
 
 
 class TestModelConfig:

@@ -1,3 +1,7 @@
+# DoRA (Weight-Decomposed Low-Rank Adaptation) configuration for Llama 3
+# DoRA decomposes weights into magnitude and direction components
+# Generally provides better performance than standard LoRA
+
 model:
   model_name_or_path: meta-llama/Meta-Llama-3-8B
   model_type: causal_lm
@@ -6,12 +10,9 @@ model:
   use_flash_attention_2: true
   load_in_4bit: false
   load_in_8bit: false
-  bnb_4bit_compute_dtype: bfloat16
-  bnb_4bit_quant_type: nf4
-  bnb_4bit_use_double_quant: true
 
 lora:
-  method: lora
+  method: dora
   r: 16
   alpha: 32
   dropout: 0.05
@@ -33,7 +34,7 @@ data:
   train_split: train
 
 training:
-  output_dir: ./outputs/llama3-lora
+  output_dir: ./outputs/llama3-dora
   num_train_epochs: 3
   per_device_train_batch_size: 4
   per_device_eval_batch_size: 4
@@ -53,4 +54,4 @@ training:
   seed: 42
   dataloader_num_workers: 4
   report_to: wandb
-  wandb_project: llama3-lora-finetune
+  wandb_project: llama3-dora-finetune

@@ -1,3 +1,7 @@
+# IA3 (Infused Adapter by Inhibiting and Amplifying Inner Activations) for Llama 3
+# IA3 is extremely parameter-efficient - learns only rescaling vectors
+# Good for few-shot learning scenarios
+
 model:
   model_name_or_path: meta-llama/Meta-Llama-3-8B
   model_type: causal_lm
@@ -6,24 +10,15 @@ model:
   use_flash_attention_2: true
   load_in_4bit: false
   load_in_8bit: false
-  bnb_4bit_compute_dtype: bfloat16
-  bnb_4bit_quant_type: nf4
-  bnb_4bit_use_double_quant: true
 
 lora:
-  method: lora
-  r: 16
-  alpha: 32
-  dropout: 0.05
+  method: ia3
   target_modules:
-    - q_proj
     - k_proj
     - v_proj
-    - o_proj
-    - gate_proj
-    - up_proj
     - down_proj
-  bias: none
+  feedforward_modules:
+    - down_proj
 
 data:
   dataset_name: tatsu-lab/alpaca
@@ -33,12 +28,12 @@ data:
   train_split: train
 
 training:
-  output_dir: ./outputs/llama3-lora
+  output_dir: ./outputs/llama3-ia3
   num_train_epochs: 3
   per_device_train_batch_size: 4
   per_device_eval_batch_size: 4
   gradient_accumulation_steps: 4
-  learning_rate: 2.0e-4
+  learning_rate: 1.0e-3
   weight_decay: 0.01
   warmup_ratio: 0.03
   max_grad_norm: 1.0
@@ -53,4 +48,4 @@ training:
   seed: 42
   dataloader_num_workers: 4
   report_to: wandb
-  wandb_project: llama3-lora-finetune
+  wandb_project: llama3-ia3-finetune

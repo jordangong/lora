@@ -3,12 +3,17 @@
 import pytest
 import torch
 
-from lora_finetune.config import ModelConfig
+from lora_finetune.config import LoraConfig, ModelConfig
 from lora_finetune.models.base import (
     MODEL_TYPE_TO_AUTO_CLASS,
     MODEL_TYPE_TO_TASK_TYPE,
+    _create_ia3_config,
+    _create_lora_config,
+    _create_prefix_tuning_config,
+    _get_task_type,
     get_quantization_config,
     get_torch_dtype,
+    prepare_model_for_full_finetuning,
 )
 from lora_finetune.models.llm import (
     LLM_TARGET_MODULES,
@@ -320,6 +325,220 @@ class TestVisionDatasetHelpers:
         dataset = MockDataset()
         label2id = get_label2id(dataset)
         assert label2id == {"cat": 0, "dog": 1, "bird": 2}
+
+
+class TestGetTaskType:
+    """Tests for _get_task_type function."""
+
+    def test_causal_lm_task_type(self):
+        """Test task type for causal LM models."""
+        from peft import TaskType
+
+        config = LoraConfig()
+        task_type = _get_task_type("causal_lm", config)
+        assert task_type == TaskType.CAUSAL_LM
+
+    def test_seq2seq_task_type(self):
+        """Test task type for seq2seq models."""
+        from peft import TaskType
+
+        config = LoraConfig()
+        task_type = _get_task_type("seq2seq", config)
+        assert task_type == TaskType.SEQ_2_SEQ_LM
+
+    def test_vision_task_type(self):
+        """Test task type for vision models."""
+        from peft import TaskType
+
+        config = LoraConfig()
+        task_type = _get_task_type("vision", config)
+        assert task_type == TaskType.FEATURE_EXTRACTION
+
+    def test_custom_task_type_override(self):
+        """Test that task_type in config overrides model type."""
+        from peft import TaskType
+
+        config = LoraConfig(task_type="SEQ_CLS")
+        task_type = _get_task_type("causal_lm", config)
+        assert task_type == TaskType.SEQ_CLS
+
+
+class TestCreateLoraConfig:
+    """Tests for _create_lora_config function."""
+
+    def test_basic_lora_config(self):
+        """Test creating basic LoRA config."""
+        from peft import TaskType
+
+        lora_config = LoraConfig(r=16, alpha=32, dropout=0.1)
+        peft_config = _create_lora_config(lora_config, TaskType.CAUSAL_LM)
+
+        assert peft_config.r == 16
+        assert peft_config.lora_alpha == 32
+        assert peft_config.lora_dropout == 0.1
+        assert peft_config.task_type == TaskType.CAUSAL_LM
+
+    def test_lora_config_with_dora(self):
+        """Test creating LoRA config with DoRA enabled."""
+        from peft import TaskType
+
+        lora_config = LoraConfig(r=16, use_dora=True)
+        peft_config = _create_lora_config(lora_config, TaskType.CAUSAL_LM)
+
+        assert peft_config.use_dora is True
+
+    def test_lora_config_with_rslora(self):
+        """Test creating LoRA config with RSLoRA enabled."""
+        from peft import TaskType
+
+        lora_config = LoraConfig(r=16, use_rslora=True)
+        peft_config = _create_lora_config(lora_config, TaskType.CAUSAL_LM)
+
+        assert peft_config.use_rslora is True
+
+    def test_lora_config_target_modules(self):
+        """Test LoRA config with custom target modules."""
+        from peft import TaskType
+
+        lora_config = LoraConfig(target_modules=["q_proj", "v_proj"])
+        peft_config = _create_lora_config(lora_config, TaskType.CAUSAL_LM)
+
+        # PEFT converts lists to sets internally
+        assert set(peft_config.target_modules) == {"q_proj", "v_proj"}
+
+
+class TestCreateAdaLoraConfig:
+    """Tests for _create_adalora_config function."""
+
+    def test_adalora_config_defaults(self):
+        """Test creating AdaLoRA config with defaults."""
+
+        lora_config = LoraConfig(method="adalora")
+        # AdaLoRA requires total_step, so we test the config values are passed correctly
+        # by checking the lora_config values directly since AdaLoRA validation requires total_step
+        assert lora_config.init_r == 12
+        assert lora_config.target_r == 8
+
+    def test_adalora_config_custom(self):
+        """Test creating AdaLoRA config with custom values."""
+        lora_config = LoraConfig(
+            method="adalora",
+            init_r=24,
+            target_r=16,
+            tinit=100,
+            tfinal=500,
+            deltaT=5,
+            beta1=0.9,
+            beta2=0.9,
+            orth_reg_weight=0.3,
+        )
+        # Verify the config values are stored correctly
+        # (actual AdaLoRA creation requires total_step which is set during training)
+        assert lora_config.init_r == 24
+        assert lora_config.target_r == 16
+        assert lora_config.tinit == 100
+        assert lora_config.tfinal == 500
+        assert lora_config.deltaT == 5
+        assert lora_config.beta1 == 0.9
+        assert lora_config.beta2 == 0.9
+        assert lora_config.orth_reg_weight == 0.3
+
+
+class TestCreateIA3Config:
+    """Tests for _create_ia3_config function."""
+
+    def test_ia3_config_with_feedforward_subset(self):
+        """Test creating IA3 config where feedforward_modules is subset of target_modules."""
+        from peft import TaskType
+
+        # feedforward_modules must be a subset of target_modules per PEFT validation
+        lora_config = LoraConfig(
+            method="ia3",
+            target_modules=["k_proj", "v_proj", "down_proj"],
+            feedforward_modules=["down_proj"],
+        )
+        peft_config = _create_ia3_config(lora_config, TaskType.CAUSAL_LM)
+
+        # PEFT converts lists to sets
+        assert peft_config.target_modules == {"k_proj", "v_proj", "down_proj"}
+        assert peft_config.feedforward_modules == {"down_proj"}
+
+    def test_ia3_config_values(self):
+        """Test IA3 config stores values correctly."""
+        lora_config = LoraConfig(
+            method="ia3",
+            target_modules=["k_proj", "v_proj", "down_proj"],
+            feedforward_modules=["down_proj"],
+        )
+        # Verify config values are stored
+        assert lora_config.method == "ia3"
+        assert "down_proj" in lora_config.target_modules
+        assert lora_config.feedforward_modules == ["down_proj"]
+
+
+class TestCreatePrefixTuningConfig:
+    """Tests for _create_prefix_tuning_config function."""
+
+    def test_prefix_tuning_config_defaults(self):
+        """Test creating prefix tuning config with defaults."""
+        from peft import TaskType
+
+        lora_config = LoraConfig(method="prefix_tuning")
+        peft_config = _create_prefix_tuning_config(lora_config, TaskType.CAUSAL_LM)
+
+        assert peft_config.num_virtual_tokens == 20
+        assert peft_config.prefix_projection is False
+
+    def test_prefix_tuning_config_custom(self):
+        """Test creating prefix tuning config with custom values."""
+        from peft import TaskType
+
+        lora_config = LoraConfig(
+            method="prefix_tuning",
+            num_virtual_tokens=50,
+            prefix_projection=True,
+        )
+        peft_config = _create_prefix_tuning_config(lora_config, TaskType.CAUSAL_LM)
+
+        assert peft_config.num_virtual_tokens == 50
+        assert peft_config.prefix_projection is True
+
+
+class TestPrepareModelForFullFinetuning:
+    """Tests for prepare_model_for_full_finetuning function."""
+
+    def test_enables_all_parameters(self):
+        """Test that full finetuning enables all parameters."""
+        model = torch.nn.Sequential(
+            torch.nn.Linear(10, 5),
+            torch.nn.ReLU(),
+            torch.nn.Linear(5, 2),
+        )
+        # Disable some parameters first
+        for param in model.parameters():
+            param.requires_grad = False
+
+        result = prepare_model_for_full_finetuning(model, is_quantized=False)
+
+        # All parameters should be trainable
+        for param in result.parameters():
+            assert param.requires_grad is True
+
+    def test_raises_error_with_quantization(self):
+        """Test that full finetuning raises error with quantization."""
+        import pytest
+
+        model = torch.nn.Linear(10, 5)
+
+        with pytest.raises(ValueError, match="not compatible with quantization"):
+            prepare_model_for_full_finetuning(model, is_quantized=True)
+
+    def test_returns_same_model(self):
+        """Test that the same model instance is returned."""
+        model = torch.nn.Linear(10, 5)
+        result = prepare_model_for_full_finetuning(model, is_quantized=False)
+
+        assert result is model
 
 
 class TestResizeTokenEmbeddings:

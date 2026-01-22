@@ -5,11 +5,20 @@ from typing import List, Literal, Optional, Union
 
 import yaml
 
+# Supported finetuning methods
+FINETUNE_METHODS = Literal["lora", "full", "dora", "adalora", "loraplus", "ia3", "prefix_tuning"]
+
 
 @dataclass
 class LoraConfig:
-    """LoRA-specific configuration."""
+    """LoRA and adapter-specific configuration."""
 
+    method: FINETUNE_METHODS = field(
+        default="lora",
+        metadata={
+            "help": "Finetuning method: lora, full, dora, adalora, loraplus, ia3, prefix_tuning"
+        },
+    )
     r: int = field(default=16, metadata={"help": "LoRA rank (dimension of low-rank matrices)"})
     alpha: int = field(default=32, metadata={"help": "LoRA alpha (scaling factor)"})
     dropout: float = field(default=0.05, metadata={"help": "Dropout probability for LoRA layers"})
@@ -28,10 +37,44 @@ class LoraConfig:
     modules_to_save: Optional[List[str]] = field(
         default=None, metadata={"help": "List of modules to save (not apply LoRA, but train fully)"}
     )
+    # DoRA-specific
+    use_dora: bool = field(default=False, metadata={"help": "Use weight-decomposed LoRA (DoRA)"})
+    # AdaLoRA-specific
+    init_r: int = field(default=12, metadata={"help": "Initial rank for AdaLoRA"})
+    target_r: int = field(default=8, metadata={"help": "Target average rank for AdaLoRA"})
+    tinit: int = field(default=0, metadata={"help": "Initial warmup steps for AdaLoRA"})
+    tfinal: int = field(default=0, metadata={"help": "Final steps for AdaLoRA rank allocation"})
+    deltaT: int = field(default=1, metadata={"help": "Step interval for AdaLoRA rank update"})
+    beta1: float = field(default=0.85, metadata={"help": "Beta1 for AdaLoRA importance score EMA"})
+    beta2: float = field(default=0.85, metadata={"help": "Beta2 for AdaLoRA importance score EMA"})
+    orth_reg_weight: float = field(
+        default=0.5, metadata={"help": "Orthogonal regularization weight for AdaLoRA"}
+    )
+    # LoRA+ specific
+    loraplus_lr_ratio: float = field(
+        default=16.0,
+        metadata={"help": "Learning rate ratio for B matrix in LoRA+ (lr_B = lr_A * ratio)"},
+    )
+    # IA3-specific
+    feedforward_modules: Optional[List[str]] = field(
+        default=None, metadata={"help": "List of feedforward module names for IA3"}
+    )
+    # Prefix tuning specific
+    num_virtual_tokens: int = field(
+        default=20, metadata={"help": "Number of virtual tokens for prefix tuning"}
+    )
+    prefix_projection: bool = field(
+        default=False, metadata={"help": "Use projection layer for prefix tuning"}
+    )
+    # RSLoRA
+    use_rslora: bool = field(default=False, metadata={"help": "Use Rank-Stabilized LoRA scaling"})
 
     def __post_init__(self):
         if self.target_modules is None:
             self.target_modules = ["q_proj", "v_proj", "k_proj", "o_proj"]
+        # Auto-enable DoRA flag when method is dora
+        if self.method == "dora":
+            self.use_dora = True
 
 
 @dataclass

@@ -8,6 +8,7 @@ model:
   load_in_8bit: false
 
 lora:
+  method: lora
   r: 16
   alpha: 32
   dropout: 0.05

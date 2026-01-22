@@ -22,6 +22,7 @@ from .trainer import (
     prepare_model_for_training,
 )
 from .utils import (
+    get_method_display_name,
     print_model_size,
     set_seed,
     setup_logging,
@@ -80,6 +81,7 @@ def train_llm(config: Config) -> None:
         processing_class=tokenizer,
         data_collator=data_collator,
         compute_metrics=compute_metrics,
+        lora_config=config.lora,
     )
 
     trainer.train(resume_from_checkpoint=config.training.resume_from_checkpoint)
@@ -147,6 +149,7 @@ def train_vision(config: Config) -> None:
         processing_class=None,
         data_collator=data_collator,
         compute_metrics=compute_metrics,
+        lora_config=config.lora,
     )
 
     trainer.train(resume_from_checkpoint=config.training.resume_from_checkpoint)
@@ -195,15 +198,25 @@ def main() -> None:
         table.add_row("Max eval samples", str(config.data.max_eval_samples))
     table.add_row("", "")  # Separator
 
-    # LoRA settings
-    table.add_row("LoRA rank (r)", str(config.lora.r))
-    table.add_row("LoRA alpha", str(config.lora.alpha))
-    table.add_row("LoRA dropout", str(config.lora.dropout))
-    if config.lora.target_modules:
-        modules = config.lora.target_modules
-        if isinstance(modules, list):
-            modules = ", ".join(modules[:4]) + ("..." if len(modules) > 4 else "")
-        table.add_row("Target modules", str(modules))
+    # Finetuning method settings
+    method_display = get_method_display_name(config.lora.method)
+    table.add_row("Method", method_display)
+    if config.lora.method != "full":
+        if config.lora.method in ("lora", "dora", "adalora", "loraplus"):
+            table.add_row("Rank (r)", str(config.lora.r))
+            table.add_row("Alpha", str(config.lora.alpha))
+            table.add_row("Dropout", str(config.lora.dropout))
+        if config.lora.method == "adalora":
+            table.add_row("Target rank", str(config.lora.target_r))
+        if config.lora.method == "loraplus":
+            table.add_row("LR ratio (B/A)", str(config.lora.loraplus_lr_ratio))
+        if config.lora.method == "prefix_tuning":
+            table.add_row("Virtual tokens", str(config.lora.num_virtual_tokens))
+        if config.lora.target_modules:
+            modules = config.lora.target_modules
+            if isinstance(modules, list):
+                modules = ", ".join(modules[:4]) + ("..." if len(modules) > 4 else "")
+            table.add_row("Target modules", str(modules))
     table.add_row("", "")  # Separator
 
     # Training settings

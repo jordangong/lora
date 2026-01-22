@@ -11,6 +11,7 @@ model:
   bnb_4bit_use_double_quant: true
 
 lora:
+  method: lora
   r: 16
   alpha: 32
   dropout: 0.05

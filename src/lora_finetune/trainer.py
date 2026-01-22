@@ -27,7 +27,7 @@ from transformers import (
 )
 from transformers.trainer_callback import PrinterCallback, TrainerCallback
 
-from .config import ModelConfig, TrainingConfig
+from .config import LoraConfig, ModelConfig, TrainingConfig
 
 console = Console()
 
@@ -358,6 +358,7 @@ class LoraTrainer(Trainer):
         data_collator: Optional[DataCollator] = None,
         callbacks: Optional[List[TrainerCallback]] = None,
         compute_metrics: Optional[Callable[[EvalPrediction], Dict]] = None,
+        lora_config: Optional[LoraConfig] = None,
         **kwargs,
     ):
         super().__init__(
@@ -371,10 +372,88 @@ class LoraTrainer(Trainer):
             compute_metrics=compute_metrics,
             **kwargs,
         )
+        self.lora_config = lora_config
 
     def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
         """Compute loss with optional label smoothing."""
         return super().compute_loss(model, inputs, return_outputs=return_outputs, **kwargs)
+
+    def create_optimizer(self):
+        """Create optimizer with LoRA+ support for different learning rates."""
+        if self.lora_config is not None and self.lora_config.method == "loraplus":
+            return self._create_loraplus_optimizer()
+        return super().create_optimizer()
+
+    def _create_loraplus_optimizer(self):
+        """Create LoRA+ optimizer with different LRs for A and B matrices."""
+        from transformers.pytorch_utils import ALL_LAYERNORM_LAYERS
+        from transformers.trainer_pt_utils import get_parameter_names
+
+        decay_parameters = get_parameter_names(self.model, ALL_LAYERNORM_LAYERS)
+        decay_parameters = [name for name in decay_parameters if "bias" not in name]
+
+        lr_ratio = self.lora_config.loraplus_lr_ratio
+        base_lr = self.args.learning_rate
+
+        # Separate parameters into groups based on LoRA A/B matrices
+        optimizer_grouped_parameters = [
+            # LoRA B matrices - higher learning rate
+            {
+                "params": [
+                    p
+                    for n, p in self.model.named_parameters()
+                    if p.requires_grad and "lora_B" in n and n in decay_parameters
+                ],
+                "weight_decay": self.args.weight_decay,
+                "lr": base_lr * lr_ratio,
+            },
+            {
+                "params": [
+                    p
+                    for n, p in self.model.named_parameters()
+                    if p.requires_grad and "lora_B" in n and n not in decay_parameters
+                ],
+                "weight_decay": 0.0,
+                "lr": base_lr * lr_ratio,
+            },
+            # LoRA A matrices and other params - base learning rate
+            {
+                "params": [
+                    p
+                    for n, p in self.model.named_parameters()
+                    if p.requires_grad and "lora_B" not in n and n in decay_parameters
+                ],
+                "weight_decay": self.args.weight_decay,
+                "lr": base_lr,
+            },
+            {
+                "params": [
+                    p
+                    for n, p in self.model.named_parameters()
+                    if p.requires_grad and "lora_B" not in n and n not in decay_parameters
+                ],
+                "weight_decay": 0.0,
+                "lr": base_lr,
+            },
+        ]
+
+        # Filter out empty parameter groups
+        optimizer_grouped_parameters = [
+            group for group in optimizer_grouped_parameters if len(group["params"]) > 0
+        ]
+
+        optimizer_cls, optimizer_kwargs = Trainer.get_optimizer_cls_and_kwargs(self.args)
+        # Remove lr from kwargs since we set it per group
+        optimizer_kwargs.pop("lr", None)
+
+        self.optimizer = optimizer_cls(optimizer_grouped_parameters, **optimizer_kwargs)
+
+        logger.info(
+            f"LoRA+ optimizer created with lr_ratio={lr_ratio} "
+            f"(lr_A={base_lr}, lr_B={base_lr * lr_ratio})"
+        )
+
+        return self.optimizer
 
     def evaluation_loop(
         self,
@@ -470,6 +549,7 @@ def create_trainer(
     processing_class=None,
     data_collator: Optional[DataCollator] = None,
     compute_metrics: Optional[Callable[[EvalPrediction], Dict]] = None,
+    lora_config: Optional[LoraConfig] = None,
 ) -> LoraTrainer:
     """Create trainer with all optimizations configured."""
     wandb_run_name = setup_wandb(training_config)
@@ -502,6 +582,7 @@ def create_trainer(
         data_collator=data_collator,
         callbacks=callbacks,
         compute_metrics=compute_metrics,
+        lora_config=lora_config,
     )
 
     # Remove default PrinterCallback (we use RichProgressCallback instead)

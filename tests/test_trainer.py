@@ -6,7 +6,7 @@ import numpy as np
 import torch
 from torch import nn
 
-from lora_finetune.config import ModelConfig, TrainingConfig
+from lora_finetune.config import LoraConfig, ModelConfig, TrainingConfig
 from lora_finetune.trainer import (
     LoraTrainer,
     compute_metrics_for_classification,
@@ -474,6 +474,52 @@ class TestLoraTrainer:
         assert trainer is not None
         assert trainer.model is model
 
+    def test_lora_trainer_with_lora_config(self):
+        """Test LoraTrainer with lora_config parameter."""
+        from transformers import TrainingArguments
+
+        model = nn.Linear(10, 5)
+        args = TrainingArguments(
+            output_dir="./test-output",
+            num_train_epochs=1,
+            per_device_train_batch_size=1,
+            report_to="none",
+        )
+        lora_config = LoraConfig(method="lora", r=16)
+
+        trainer = LoraTrainer(
+            model=model,
+            args=args,
+            train_dataset=None,
+            lora_config=lora_config,
+        )
+
+        assert trainer.lora_config is lora_config
+        assert trainer.lora_config.method == "lora"
+
+    def test_lora_trainer_loraplus_config(self):
+        """Test LoraTrainer with LoRA+ configuration."""
+        from transformers import TrainingArguments
+
+        model = nn.Linear(10, 5)
+        args = TrainingArguments(
+            output_dir="./test-output",
+            num_train_epochs=1,
+            per_device_train_batch_size=1,
+            report_to="none",
+        )
+        lora_config = LoraConfig(method="loraplus", loraplus_lr_ratio=16.0)
+
+        trainer = LoraTrainer(
+            model=model,
+            args=args,
+            train_dataset=None,
+            lora_config=lora_config,
+        )
+
+        assert trainer.lora_config.method == "loraplus"
+        assert trainer.lora_config.loraplus_lr_ratio == 16.0
+
     def test_lora_trainer_compute_loss(self):
         """Test that compute_loss delegates to parent."""
         from transformers import TrainingArguments
@@ -495,3 +541,47 @@ class TestLoraTrainer:
         # Just verify the method exists and is callable
         assert hasattr(trainer, "compute_loss")
         assert callable(trainer.compute_loss)
+
+    def test_lora_trainer_create_optimizer_method_exists(self):
+        """Test that create_optimizer method exists."""
+        from transformers import TrainingArguments
+
+        model = nn.Linear(10, 5)
+        args = TrainingArguments(
+            output_dir="./test-output",
+            num_train_epochs=1,
+            per_device_train_batch_size=1,
+            report_to="none",
+        )
+
+        trainer = LoraTrainer(
+            model=model,
+            args=args,
+            train_dataset=None,
+        )
+
+        assert hasattr(trainer, "create_optimizer")
+        assert callable(trainer.create_optimizer)
+
+    def test_lora_trainer_loraplus_optimizer_method_exists(self):
+        """Test that _create_loraplus_optimizer method exists."""
+        from transformers import TrainingArguments
+
+        model = nn.Linear(10, 5)
+        args = TrainingArguments(
+            output_dir="./test-output",
+            num_train_epochs=1,
+            per_device_train_batch_size=1,
+            report_to="none",
+        )
+        lora_config = LoraConfig(method="loraplus")
+
+        trainer = LoraTrainer(
+            model=model,
+            args=args,
+            train_dataset=None,
+            lora_config=lora_config,
+        )
+
+        assert hasattr(trainer, "_create_loraplus_optimizer")
+        assert callable(trainer._create_loraplus_optimizer)
