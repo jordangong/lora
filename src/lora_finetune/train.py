@@ -54,7 +54,7 @@ def train_llm(config: Config) -> None:
             is_quantized=is_quantized,
         )
 
-        model = prepare_model_for_training(model, config.training)
+        model = prepare_model_for_training(model, config.training, tokenizer)
 
     print_model_size(model)
 

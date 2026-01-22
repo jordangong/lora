@@ -4,17 +4,14 @@ import logging
 from typing import Any, Optional, Tuple, Union
 
 import torch
+from peft import AdaLoraConfig, IA3Config
+from peft import LoraConfig as PeftLoraConfig
 from peft import (
-    AdaLoraConfig,
-    IA3Config,
     PeftModel,
     PrefixTuningConfig,
     TaskType,
     get_peft_model,
     prepare_model_for_kbit_training,
-)
-from peft import (
-    LoraConfig as PeftLoraConfig,
 )
 from transformers import (
     AutoImageProcessor,
@@ -125,6 +122,11 @@ def load_model_and_tokenizer(
             tokenizer.pad_token = tokenizer.eos_token
             tokenizer.pad_token_id = tokenizer.eos_token_id
             logger.info("Set pad_token to eos_token")
+
+        # Sync model config and generation config with tokenizer to avoid mismatch warnings
+        model.config.pad_token_id = tokenizer.pad_token_id
+        if hasattr(model, "generation_config") and model.generation_config is not None:
+            model.generation_config.pad_token_id = tokenizer.pad_token_id
 
         return model, tokenizer
 

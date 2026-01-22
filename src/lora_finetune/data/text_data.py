@@ -51,6 +51,40 @@ def load_text_dataset(config: DataConfig) -> DatasetDict:
     else:
         raise ValueError("Either dataset_name or train_file must be provided")
 
+    # Load holdout eval dataset if specified (takes priority)
+    if config.eval_dataset_name is not None:
+        logger.info(f"Loading holdout eval dataset: {config.eval_dataset_name}")
+        eval_dataset = load_dataset(
+            config.eval_dataset_name,
+            config.eval_dataset_config_name,
+            split=config.eval_dataset_split,
+        )
+        dataset = DatasetDict(
+            {
+                config.train_split: dataset[config.train_split],
+                config.validation_split: eval_dataset,
+            }
+        )
+    # Split train data for evaluation if validation split doesn't exist and eval_split_ratio is set
+    elif (
+        config.validation_split not in dataset
+        and config.eval_split_ratio is not None
+        and config.eval_split_ratio > 0
+    ):
+        logger.info(
+            f"Splitting train data with eval_split_ratio={config.eval_split_ratio}"
+        )
+        split_dataset = dataset[config.train_split].train_test_split(
+            test_size=config.eval_split_ratio,
+            seed=42,
+        )
+        dataset = DatasetDict(
+            {
+                config.train_split: split_dataset["train"],
+                config.validation_split: split_dataset["test"],
+            }
+        )
+
     return dataset
 
 
@@ -69,6 +103,13 @@ def format_instruction(
         output=output,
     )
     return {"text": text}
+
+
+def format_qa(example: Dict[str, Any]) -> Dict[str, str]:
+    """Format question/answer style examples (e.g., gsm8k, squad)."""
+    question = example.get("question", "")
+    answer = example.get("answer", "")
+    return {"text": f"Question: {question}\n\nAnswer: {answer}"}
 
 
 def tokenize_function(
@@ -96,17 +137,6 @@ def preprocess_text_dataset(
     logger.info(f"Preprocessing dataset with max_seq_length={config.max_seq_length}")
     template = config.prompt_template or DEFAULT_PROMPT_TEMPLATE
 
-    if "instruction" in dataset[config.train_split].column_names:
-        logger.info("Using instruction template formatting")
-        dataset = dataset.map(
-            partial(format_instruction, template=template),
-            remove_columns=[
-                col for col in dataset[config.train_split].column_names if col not in ["text"]
-            ],
-            num_proc=config.preprocessing_num_workers,
-            desc="Formatting instructions",
-        )
-
     tokenize_fn = partial(
         tokenize_function,
         tokenizer=tokenizer,
@@ -114,13 +144,43 @@ def preprocess_text_dataset(
         text_column=config.text_column,
     )
 
-    tokenized_dataset = dataset.map(
-        tokenize_fn,
-        batched=True,
-        num_proc=config.preprocessing_num_workers,
-        remove_columns=dataset[config.train_split].column_names,
-        desc="Tokenizing",
-    )
+    # Process each split separately (they may have different columns for holdout eval)
+    tokenized_splits = {}
+    for split_name, split_data in dataset.items():
+        columns = split_data.column_names
+
+        # Apply formatting based on column structure (skip if text column exists)
+        if config.text_column in columns:
+            logger.info(f"Using existing '{config.text_column}' column for {split_name}")
+        elif "instruction" in columns:
+            logger.info(f"Using instruction template formatting for {split_name}")
+            split_data = split_data.map(
+                partial(format_instruction, template=template),
+                remove_columns=[col for col in columns if col not in ["text"]],
+                num_proc=config.preprocessing_num_workers,
+                desc=f"Formatting instructions ({split_name})",
+            )
+            columns = split_data.column_names
+        elif "question" in columns:
+            logger.info(f"Using question/answer formatting for {split_name}")
+            split_data = split_data.map(
+                format_qa,
+                remove_columns=[col for col in columns if col not in ["text"]],
+                num_proc=config.preprocessing_num_workers,
+                desc=f"Formatting Q&A ({split_name})",
+            )
+            columns = split_data.column_names
+
+        # Tokenize
+        tokenized_splits[split_name] = split_data.map(
+            tokenize_fn,
+            batched=True,
+            num_proc=config.preprocessing_num_workers,
+            remove_columns=columns,
+            desc=f"Tokenizing ({split_name})",
+        )
+
+    tokenized_dataset = DatasetDict(tokenized_splits)
 
     if config.max_train_samples:
         tokenized_dataset[config.train_split] = tokenized_dataset[config.train_split].select(

@@ -21,6 +21,12 @@ data:
   max_seq_length: 2048
   preprocessing_num_workers: 4
   train_split: train
+  # Option 1: Use holdout dataset for zero-shot eval
+  eval_dataset_name: gsm8k
+  eval_dataset_config_name: main
+  eval_dataset_split: test
+  # Option 2: Split training data (uncomment if no holdout dataset)
+  # eval_split_ratio: 0.05
 
 training:
   output_dir: ./outputs/llama3-full

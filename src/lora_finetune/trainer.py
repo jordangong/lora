@@ -18,13 +18,7 @@ from rich.progress import (
     TimeRemainingColumn,
 )
 from rich.table import Table
-from transformers import (
-    DataCollator,
-    EvalPrediction,
-    PreTrainedModel,
-    Trainer,
-    TrainingArguments,
-)
+from transformers import DataCollator, EvalPrediction, PreTrainedModel, Trainer, TrainingArguments
 from transformers.trainer_callback import PrinterCallback, TrainerCallback
 
 from .config import LoraConfig, ModelConfig, TrainingConfig
@@ -594,6 +588,8 @@ def create_trainer(
 def enable_gradient_checkpointing(model: PreTrainedModel) -> PreTrainedModel:
     """Enable gradient checkpointing for memory efficiency."""
     if hasattr(model, "gradient_checkpointing_enable"):
+        # Disable use_cache as it's incompatible with gradient checkpointing
+        model.config.use_cache = False
         model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
         logger.info("Gradient checkpointing enabled")
     elif hasattr(model, "enable_input_require_grads"):
@@ -604,10 +600,17 @@ def enable_gradient_checkpointing(model: PreTrainedModel) -> PreTrainedModel:
 def prepare_model_for_training(
     model: PreTrainedModel,
     training_config: TrainingConfig,
+    tokenizer=None,
 ) -> PreTrainedModel:
     """Prepare model for training with optimizations."""
     if training_config.gradient_checkpointing:
         model = enable_gradient_checkpointing(model)
+
+    # Sync model config with tokenizer to avoid mismatch warnings (after PEFT wrapping)
+    if tokenizer is not None and tokenizer.pad_token_id is not None:
+        model.config.pad_token_id = tokenizer.pad_token_id
+        if hasattr(model, "generation_config") and model.generation_config is not None:
+            model.generation_config.pad_token_id = tokenizer.pad_token_id
 
     for param in model.parameters():
         if param.requires_grad:

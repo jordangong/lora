@@ -260,6 +260,24 @@ class DataConfig:
     max_eval_samples: Optional[int] = field(
         default=None, metadata={"help": "Maximum number of evaluation samples"}
     )
+    eval_split_ratio: Optional[float] = field(
+        default=None,
+        metadata={"help": "Ratio of training data to use for evaluation (e.g., 0.1 for 10%)"},
+    )
+    eval_dataset_name: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "Holdout dataset name for zero-shot evaluation (e.g., 'gsm8k', 'hellaswag')"
+        },
+    )
+    eval_dataset_config_name: Optional[str] = field(
+        default=None,
+        metadata={"help": "Holdout dataset configuration name"},
+    )
+    eval_dataset_split: str = field(
+        default="test",
+        metadata={"help": "Split to use from the holdout eval dataset"},
+    )
     image_size: int = field(default=224, metadata={"help": "Image size for vision models"})
     prompt_template: Optional[str] = field(
         default=None, metadata={"help": "Prompt template for text formatting"}
