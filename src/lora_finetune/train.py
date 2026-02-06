@@ -269,6 +269,15 @@ def main() -> None:
     table.add_row("FSDP", config.training.fsdp or "disabled")
     table.add_row("Output dir", config.training.output_dir)
 
+    # Benchmark evaluation settings
+    if config.benchmark_eval.enabled:
+        table.add_row("", "")  # Separator
+        table.add_row("Benchmark eval", "✓")
+        table.add_row("Benchmark tasks", config.benchmark_eval.tasks)
+        table.add_row("Bench eval steps", str(config.benchmark_eval.eval_steps))
+        if config.benchmark_eval.num_samples:
+            table.add_row("Bench samples", str(config.benchmark_eval.num_samples))
+
     console.print(Panel(table, title="[bold blue]Configuration[/bold blue]", border_style="blue"))
 
     if config.model.model_type == "vision":

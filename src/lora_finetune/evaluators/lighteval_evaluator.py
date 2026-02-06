@@ -69,14 +69,20 @@ class _RichTqdmBridge:
         self._total = kwargs.get("total") or (
             len(iterable) if iterable is not None and hasattr(iterable, "__len__") else None
         )
-        # Only show Rich progress for the inner generation loop, not outer splits
+        # Use the caller's desc to pick an appropriate label:
+        # - outer splits loop → show progress_label (e.g. "Benchmark eval (gsm8k,mmlu)")
+        # - inner generation loop → show "Generating"
         self._desc = kwargs.get("desc", "")
-        self._show_progress = self._progress is not None and "generation" in self._desc.lower()
+        self._show_progress = self._progress is not None
+        if "generation" in self._desc.lower():
+            self._display_label = "Generating"
+        else:
+            self._display_label = self._task_label
 
     def __iter__(self):
         if self._show_progress and self._total is not None:
             self._task_id = self._progress.add_task(
-                f"[yellow]{self._task_label}[/yellow]",
+                f"[yellow]{self._display_label}[/yellow]",
                 total=self._total,
             )
         try:
