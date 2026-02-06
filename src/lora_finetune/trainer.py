@@ -567,9 +567,9 @@ def create_trainer(
     rich_progress_callback = RichProgressCallback()
     trainer_callbacks = [rich_progress_callback]
     if callbacks:
-        # Pass RichProgressCallback reference to GSM8KCallback for progress integration
+        # Pass RichProgressCallback reference to LightEvalCallback for progress integration
         for cb in callbacks:
-            if cb.__class__.__name__ == "GSM8KCallback":
+            if cb.__class__.__name__ == "LightEvalCallback":
                 cb.rich_progress_callback = rich_progress_callback
         trainer_callbacks.extend(callbacks)
 

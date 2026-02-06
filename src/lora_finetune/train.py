@@ -12,7 +12,7 @@ from .cli import build_config, parse_args
 from .config import BenchmarkEvalConfig, Config
 from .data.text_data import get_text_collator, load_text_dataset, preprocess_text_dataset
 from .data.vision_data import get_vision_collator, load_vision_dataset, preprocess_vision_dataset
-from .evaluators import GSM8KCallback, GSM8KEvaluator
+from .evaluators import LightEvalCallback, run_lighteval
 from .models.base import get_peft_model_with_lora, load_model_and_tokenizer
 from .models.llm import get_llm_target_modules
 from .models.vision import get_num_labels_from_dataset, get_vision_target_modules
@@ -34,30 +34,26 @@ console = Console()
 logger = logging.getLogger(__name__)
 
 
-def run_benchmark_eval(model, tokenizer, eval_config: BenchmarkEvalConfig) -> None:
-    """Run benchmark evaluation after training."""
+def run_benchmark_eval(model, model_name: str, eval_config: BenchmarkEvalConfig) -> None:
+    """Run benchmark evaluation after training using lighteval."""
     console.print(Panel("[bold blue]Running Benchmark Evaluation[/bold blue]"))
 
-    if eval_config.benchmark == "gsm8k":
-        evaluator = GSM8KEvaluator(
-            model=model,
-            tokenizer=tokenizer,
-            max_new_tokens=eval_config.max_new_tokens,
-            batch_size=eval_config.batch_size,
-            num_samples=eval_config.num_samples,
-        )
-        results = evaluator.evaluate(split="test")
+    metrics = run_lighteval(
+        model=model,
+        model_name=model_name,
+        tasks=eval_config.tasks,
+        max_samples=eval_config.num_samples,
+        batch_size=eval_config.batch_size,
+        max_new_tokens=eval_config.max_new_tokens,
+    )
 
-        # Display results
-        table = Table(title="GSM8K Evaluation Results")
-        table.add_column("Metric", style="cyan")
-        table.add_column("Value", style="green")
-        table.add_row("Accuracy", f"{results['accuracy']:.2%}")
-        table.add_row("Correct", str(results["correct"]))
-        table.add_row("Total", str(results["total"]))
-        console.print(table)
-    else:
-        logger.warning(f"Unknown benchmark: {eval_config.benchmark}")
+    # Display results
+    table = Table(title="Benchmark Evaluation Results")
+    table.add_column("Metric", style="cyan")
+    table.add_column("Value", style="green")
+    for metric_name, value in metrics.items():
+        table.add_row(metric_name, f"{value:.4f}")
+    console.print(table)
 
 
 def train_llm(config: Config) -> None:
@@ -101,16 +97,17 @@ def train_llm(config: Config) -> None:
 
     # Create benchmark evaluation callback if enabled
     callbacks = []
-    if config.benchmark_eval.enabled and config.benchmark_eval.benchmark == "gsm8k":
-        gsm8k_callback = GSM8KCallback(
-            tokenizer=tokenizer,
+    if config.benchmark_eval.enabled:
+        eval_callback = LightEvalCallback(
+            model_name=config.model.model_name_or_path,
+            tasks=config.benchmark_eval.tasks,
             eval_steps=config.benchmark_eval.eval_steps,
-            num_samples=config.benchmark_eval.num_samples,
+            max_samples=config.benchmark_eval.num_samples,
             max_new_tokens=config.benchmark_eval.max_new_tokens,
             batch_size=config.benchmark_eval.batch_size,
         )
-        callbacks.append(gsm8k_callback)
-        logger.info(f"GSM8K benchmark eval enabled every {config.benchmark_eval.eval_steps} steps")
+        callbacks.append(eval_callback)
+        logger.info(f"Benchmark eval ({config.benchmark_eval.tasks}) enabled every {config.benchmark_eval.eval_steps} steps")
 
     trainer = create_trainer(
         model=model,
@@ -136,7 +133,7 @@ def train_llm(config: Config) -> None:
 
     # Run benchmark evaluation if enabled
     if config.benchmark_eval.enabled:
-        run_benchmark_eval(model, tokenizer, config.benchmark_eval)
+        run_benchmark_eval(model, config.model.model_name_or_path, config.benchmark_eval)
 
 
 def train_vision(config: Config) -> None:

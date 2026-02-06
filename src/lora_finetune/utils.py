@@ -44,6 +44,8 @@ class RichWarningHandler(logging.Handler):
             msg = "Using standard image processor (fast processor available with use_fast=True)"
         elif "You should probably TRAIN" in msg:
             return  # Skip this one, it's obvious
+        elif "generation flags are not valid" in msg:
+            return  # Triggered by lighteval's default temperature=0, not actionable
         elif not msg.strip():
             return
 

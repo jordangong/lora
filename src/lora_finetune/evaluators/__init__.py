@@ -1,5 +1,5 @@
 """Benchmark evaluators for finetuned models."""
 
-from .gsm8k import GSM8KCallback, GSM8KEvaluator
+from .lighteval_evaluator import LightEvalCallback, run_lighteval
 
-__all__ = ["GSM8KCallback", "GSM8KEvaluator"]
+__all__ = ["LightEvalCallback", "run_lighteval"]

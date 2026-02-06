@@ -287,13 +287,14 @@ class DataConfig:
 
 @dataclass
 class BenchmarkEvalConfig:
-    """Configuration for benchmark evaluation (e.g., GSM8K accuracy)."""
+    """Configuration for benchmark evaluation using lighteval."""
 
     enabled: bool = field(
         default=False, metadata={"help": "Enable benchmark evaluation during training"}
     )
-    benchmark: str = field(
-        default="gsm8k", metadata={"help": "Benchmark to evaluate on: gsm8k, etc."}
+    tasks: str = field(
+        default="gsm8k",
+        metadata={"help": "Lighteval task string (e.g. 'gsm8k', 'gsm8k,mmlu')"},
     )
     eval_steps: int = field(
         default=500, metadata={"help": "Run benchmark evaluation every N steps"}
@@ -373,7 +374,8 @@ class TrainingConfig:
         default=None, metadata={"help": "Kwargs for gradient checkpointing"}
     )
     optim: str = field(
-        default="adamw_torch_fused", metadata={"help": "Optimizer: adamw_torch_fused, adamw_torch, sgd, etc."}
+        default="adamw_torch_fused",
+        metadata={"help": "Optimizer: adamw_torch_fused, adamw_torch, sgd, etc."},
     )
     seed: int = field(default=42, metadata={"help": "Random seed for reproducibility"})
     data_seed: int = field(default=42, metadata={"help": "Random seed for data sampling"})

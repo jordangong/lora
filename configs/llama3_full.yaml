@@ -32,7 +32,7 @@ data:
 # Benchmark evaluation (generation-based, runs during training)
 benchmark_eval:
   enabled: true
-  benchmark: gsm8k
+  tasks: gsm8k
   eval_steps: 500  # Run GSM8K accuracy eval every N steps
   num_samples: 100  # Use subset for faster eval during training
   max_new_tokens: 512
