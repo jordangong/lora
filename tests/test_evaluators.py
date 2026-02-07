@@ -250,9 +250,11 @@ class TestLightEvalCallback:
         model.train.assert_called_with(True)
         assert torch.is_grad_enabled()
 
+    @patch("wandb.log")
+    @patch("wandb.run", new_callable=lambda: MagicMock)
     @patch("lora_finetune.evaluators.lighteval_evaluator.run_lighteval")
-    def test_on_step_end_logs_metrics_to_trainer(self, mock_run):
-        """Test that metrics are logged via trainer."""
+    def test_on_step_end_logs_metrics_to_wandb(self, mock_run, _mock_run_attr, mock_wandb_log):
+        """Test that metrics are logged directly to wandb."""
         mock_run.return_value = {"gsm8k_0|expr_gold_metric": 0.42}
 
         callback = LightEvalCallback(model_name="test-model", eval_steps=100)
@@ -264,8 +266,10 @@ class TestLightEvalCallback:
         control = MagicMock()
         model = MagicMock()
         model.training = True
-        trainer = MagicMock()
 
-        callback.on_step_end(args, state, control, model=model, trainer=trainer)
+        callback.on_step_end(args, state, control, model=model)
 
-        trainer.log.assert_called_once_with({"benchmark/gsm8k_0|expr_gold_metric": 0.42})
+        mock_wandb_log.assert_called_once_with(
+            {"benchmark/gsm8k_0|expr_gold_metric": 0.42, "train/global_step": 100},
+            step=100,
+        )

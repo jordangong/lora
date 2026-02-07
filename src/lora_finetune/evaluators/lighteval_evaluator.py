@@ -277,12 +277,16 @@ class LightEvalCallback(TrainerCallback):
             model.train(was_training)
             torch.set_grad_enabled(grad_enabled)
 
-        # Prefix metrics for wandb/tensorboard logging
+        # Log metrics to wandb directly (trainer.log() adds unwanted "train/" prefix)
         prefixed_metrics = {f"benchmark/{k}": v for k, v in metrics.items()}
+        prefixed_metrics["train/global_step"] = state.global_step
+        try:
+            import wandb
 
-        # Log to wandb/tensorboard via trainer if available
-        if "trainer" in kwargs and kwargs["trainer"] is not None:
-            kwargs["trainer"].log(prefixed_metrics)
+            if wandb.run is not None:
+                wandb.log(prefixed_metrics, step=state.global_step)
+        except ImportError:
+            pass
 
         # Print results to console
         epoch = state.epoch or 0
