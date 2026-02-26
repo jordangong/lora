@@ -71,9 +71,12 @@ def load_text_dataset(config: DataConfig) -> DatasetDict:
         and config.eval_split_ratio is not None
         and config.eval_split_ratio > 0
     ):
-        logger.info(
-            f"Splitting train data with eval_split_ratio={config.eval_split_ratio}"
-        )
+        if not hasattr(dataset[config.train_split], "train_test_split"):
+            raise ValueError(
+                "data.eval_split_ratio requires a non-streaming dataset with train_test_split support. "
+                "For streaming datasets, provide data.validation_file or data.eval_dataset_name instead."
+            )
+        logger.info(f"Splitting train data with eval_split_ratio={config.eval_split_ratio}")
         split_dataset = dataset[config.train_split].train_test_split(
             test_size=config.eval_split_ratio,
             seed=42,
@@ -91,6 +94,7 @@ def load_text_dataset(config: DataConfig) -> DatasetDict:
 def format_instruction(
     example: Dict[str, Any],
     template: str = DEFAULT_PROMPT_TEMPLATE,
+    output_column: str = "text",
 ) -> Dict[str, str]:
     """Format example using instruction template."""
     instruction = example.get("instruction", "")
@@ -102,14 +106,14 @@ def format_instruction(
         input=input_text,
         output=output,
     )
-    return {"text": text}
+    return {output_column: text}
 
 
-def format_qa(example: Dict[str, Any]) -> Dict[str, str]:
+def format_qa(example: Dict[str, Any], output_column: str = "text") -> Dict[str, str]:
     """Format question/answer style examples (e.g., gsm8k, squad)."""
     question = example.get("question", "")
     answer = example.get("answer", "")
-    return {"text": f"Question: {question}\n\nAnswer: {answer}"}
+    return {output_column: f"Question: {question}\n\nAnswer: {answer}"}
 
 
 def tokenize_function(
@@ -155,8 +159,12 @@ def preprocess_text_dataset(
         elif "instruction" in columns:
             logger.info(f"Using instruction template formatting for {split_name}")
             split_data = split_data.map(
-                partial(format_instruction, template=template),
-                remove_columns=[col for col in columns if col not in ["text"]],
+                partial(
+                    format_instruction,
+                    template=template,
+                    output_column=config.text_column,
+                ),
+                remove_columns=[col for col in columns if col not in [config.text_column]],
                 num_proc=config.preprocessing_num_workers,
                 desc=f"Formatting instructions ({split_name})",
             )
@@ -164,12 +172,18 @@ def preprocess_text_dataset(
         elif "question" in columns:
             logger.info(f"Using question/answer formatting for {split_name}")
             split_data = split_data.map(
-                format_qa,
-                remove_columns=[col for col in columns if col not in ["text"]],
+                partial(format_qa, output_column=config.text_column),
+                remove_columns=[col for col in columns if col not in [config.text_column]],
                 num_proc=config.preprocessing_num_workers,
                 desc=f"Formatting Q&A ({split_name})",
             )
             columns = split_data.column_names
+
+        if config.text_column not in columns:
+            raise ValueError(
+                f"Could not find text column '{config.text_column}' in split '{split_name}'. "
+                "Provide data.text_column or use a dataset with instruction/question fields."
+            )
 
         # Tokenize
         tokenized_splits[split_name] = split_data.map(

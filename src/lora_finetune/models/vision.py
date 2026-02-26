@@ -32,18 +32,46 @@ def get_vision_target_modules(model_name_or_path: str) -> List[str]:
 
 def get_num_labels_from_dataset(dataset) -> int:
     """Get number of labels from dataset."""
+
+    def _extract_num_classes(feature) -> int | None:
+        num_classes = getattr(feature, "num_classes", None)
+        if isinstance(num_classes, int) and num_classes > 0:
+            return num_classes
+
+        names = getattr(feature, "names", None)
+        if names:
+            return len(names)
+
+        return None
+
+    label_column = None
     if hasattr(dataset, "features") and "label" in dataset.features:
-        return dataset.features["label"].num_classes
+        label_column = "label"
     elif hasattr(dataset, "features") and "labels" in dataset.features:
-        return dataset.features["labels"].num_classes
-    else:
-        unique_labels = set()
-        for example in dataset:
-            if "label" in example:
-                unique_labels.add(example["label"])
-            elif "labels" in example:
-                unique_labels.add(example["labels"])
-        return len(unique_labels)
+        label_column = "labels"
+
+    if label_column is not None:
+        feature_num_classes = _extract_num_classes(dataset.features[label_column])
+        if feature_num_classes is not None:
+            return feature_num_classes
+
+        if hasattr(dataset, "unique"):
+            try:
+                return len(dataset.unique(label_column))
+            except Exception:
+                pass
+
+    unique_labels = set()
+    for example in dataset:
+        if "label" in example:
+            unique_labels.add(example["label"])
+        elif "labels" in example:
+            unique_labels.add(example["labels"])
+
+    if not unique_labels:
+        raise ValueError("Could not infer number of labels from dataset")
+
+    return len(unique_labels)
 
 
 def get_id2label(dataset) -> Dict[int, str]:

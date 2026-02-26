@@ -7,6 +7,7 @@ import yaml
 
 from lora_finetune.config import (
     AugmentationConfig,
+    BenchmarkEvalConfig,
     Config,
     DataConfig,
     LoraConfig,
@@ -277,6 +278,29 @@ class TestTrainingConfig:
         assert config.gradient_accumulation_steps == 8
 
 
+class TestBenchmarkEvalConfig:
+    """Tests for BenchmarkEvalConfig dataclass."""
+
+    def test_rejects_non_positive_eval_steps(self):
+        """Test benchmark eval steps must be positive."""
+        import pytest
+
+        with pytest.raises(ValueError, match="eval_steps"):
+            BenchmarkEvalConfig(eval_steps=0)
+
+    def test_rejects_non_positive_num_samples(self):
+        """Test num_samples must be positive when provided."""
+        import pytest
+
+        with pytest.raises(ValueError, match="num_samples"):
+            BenchmarkEvalConfig(num_samples=0)
+
+    def test_accepts_none_num_samples(self):
+        """Test num_samples=None remains valid."""
+        config = BenchmarkEvalConfig(num_samples=None)
+        assert config.num_samples is None
+
+
 class TestConfig:
     """Tests for main Config class."""
 
@@ -403,3 +427,15 @@ class TestConfig:
 
         config.update_from_args(args)
         assert config.training.learning_rate == original_lr
+
+    def test_from_yaml_with_empty_file(self):
+        """Test loading config from an empty YAML file uses defaults."""
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            temp_path = f.name
+
+        try:
+            config = Config.from_yaml(temp_path)
+            assert isinstance(config.model, ModelConfig)
+            assert isinstance(config.training, TrainingConfig)
+        finally:
+            os.unlink(temp_path)

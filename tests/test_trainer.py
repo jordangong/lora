@@ -3,6 +3,7 @@
 import os
 
 import numpy as np
+import pytest
 import torch
 from torch import nn
 
@@ -824,6 +825,35 @@ class TestCreateTrainer:
         )
 
         assert trainer.args.disable_tqdm is True
+
+    def test_create_trainer_fails_fast_without_eval_dataset_when_eval_enabled(self):
+        """Test fail-fast behavior when eval is enabled but eval dataset is missing."""
+        model = nn.Linear(10, 5)
+        training_config = TrainingConfig(
+            output_dir="./test-output",
+            eval_strategy="steps",
+            load_best_model_at_end=False,
+            report_to="none",
+        )
+        model_config = ModelConfig()
+
+        class SimpleDataset(torch.utils.data.Dataset):
+            def __len__(self):
+                return 10
+
+            def __getitem__(self, idx):
+                return {"input_ids": torch.tensor([1, 2, 3]), "labels": torch.tensor([1, 2, 3])}
+
+        train_dataset = SimpleDataset()
+
+        with pytest.raises(ValueError, match="no eval_dataset was provided"):
+            create_trainer(
+                model=model,
+                training_config=training_config,
+                model_config=model_config,
+                train_dataset=train_dataset,
+                eval_dataset=None,
+            )
 
 
 class TestPrepareModelWithTokenizer:

@@ -2,6 +2,7 @@
 
 import pytest
 import torch
+from datasets import Dataset
 
 from lora_finetune.config import LoraConfig, ModelConfig
 from lora_finetune.models.base import (
@@ -289,6 +290,18 @@ class TestVisionDatasetHelpers:
         dataset = MockDataset()
         num_labels = get_num_labels_from_dataset(dataset)
         assert num_labels == 3
+
+    def test_get_num_labels_from_value_feature_fallback(self):
+        """Test fallback when label feature has no num_classes attribute."""
+        dataset = Dataset.from_dict(
+            {
+                "image": [0, 1, 2],
+                "label": [0, 1, 1],
+            }
+        )
+
+        num_labels = get_num_labels_from_dataset(dataset)
+        assert num_labels == 2
 
     def test_get_id2label(self):
         """Test getting id2label mapping."""

@@ -1,36 +1,59 @@
 """Tests for benchmark evaluators using lighteval."""
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import pytest
 import torch
 
 from lora_finetune.evaluators import LightEvalCallback, run_lighteval
 
 
+def _mock_lighteval_components(mock_pipeline):
+    mock_pipeline_cls = MagicMock(return_value=mock_pipeline)
+    mock_tracker_cls = MagicMock()
+    mock_generation_parameters_cls = MagicMock(side_effect=lambda **kwargs: kwargs)
+    mock_model_config_cls = MagicMock(side_effect=lambda **kwargs: SimpleNamespace(**kwargs))
+    mock_pipeline_parameters_cls = MagicMock(side_effect=lambda **kwargs: SimpleNamespace(**kwargs))
+    mock_transformers_module = SimpleNamespace(tqdm=MagicMock())
+
+    components = {
+        "EvaluationTracker": mock_tracker_cls,
+        "GenerationParameters": mock_generation_parameters_cls,
+        "TransformersModelConfig": mock_model_config_cls,
+        "ParallelismManager": SimpleNamespace(NONE="none"),
+        "Pipeline": mock_pipeline_cls,
+        "PipelineParameters": mock_pipeline_parameters_cls,
+        "transformers_model_module": mock_transformers_module,
+    }
+
+    return components, mock_pipeline_cls
+
+
 class TestRunLighteval:
     """Tests for run_lighteval wrapper function."""
 
-    @patch("lighteval.pipeline.Pipeline")
-    @patch("lighteval.logging.evaluation_tracker.EvaluationTracker")
-    def test_run_lighteval_creates_pipeline_with_correct_args(
-        self, mock_tracker_cls, mock_pipeline_cls
-    ):
+    def test_run_lighteval_creates_pipeline_with_correct_args(self):
         """Test that run_lighteval creates Pipeline with correct configuration."""
         mock_pipeline = MagicMock()
         mock_pipeline.get_results.return_value = {
             "results": {"gsm8k_0": {"expr_gold_metric": 0.42}}
         }
-        mock_pipeline_cls.return_value = mock_pipeline
+        components, mock_pipeline_cls = _mock_lighteval_components(mock_pipeline)
 
         model = MagicMock()
-        metrics = run_lighteval(
-            model=model,
-            model_name="meta-llama/Llama-3.1-8B",
-            tasks="gsm8k",
-            max_samples=10,
-            batch_size=2,
-            max_new_tokens=256,
-        )
+        with patch(
+            "lora_finetune.evaluators.lighteval_evaluator._import_lighteval_components",
+            return_value=components,
+        ):
+            metrics = run_lighteval(
+                model=model,
+                model_name="meta-llama/Llama-3.1-8B",
+                tasks="gsm8k",
+                max_samples=10,
+                batch_size=2,
+                max_new_tokens=256,
+            )
 
         # Verify Pipeline was called with the model
         mock_pipeline_cls.assert_called_once()
@@ -41,47 +64,52 @@ class TestRunLighteval:
         # Verify evaluate was called
         mock_pipeline.evaluate.assert_called_once()
 
+        # Verify metrics are returned
+        assert metrics["gsm8k_0|expr_gold_metric"] == 0.42
+
         # Verify cleanup was monkey-patched to no-op
         mock_pipeline.model.cleanup()  # should not raise
 
-    @patch("lighteval.pipeline.Pipeline")
-    @patch("lighteval.logging.evaluation_tracker.EvaluationTracker")
-    def test_run_lighteval_extracts_metrics(self, mock_tracker_cls, mock_pipeline_cls):
+    def test_run_lighteval_extracts_metrics(self):
         """Test that run_lighteval correctly extracts metrics from results."""
         mock_pipeline = MagicMock()
         mock_pipeline.get_results.return_value = {
             "results": {"gsm8k_0": {"expr_gold_metric": 0.42, "some_other_metric": 0.99}}
         }
-        mock_pipeline_cls.return_value = mock_pipeline
+        components, _ = _mock_lighteval_components(mock_pipeline)
 
         model = MagicMock()
-        metrics = run_lighteval(
-            model=model,
-            model_name="test-model",
-            tasks="gsm8k",
-        )
+        with patch(
+            "lora_finetune.evaluators.lighteval_evaluator._import_lighteval_components",
+            return_value=components,
+        ):
+            metrics = run_lighteval(
+                model=model,
+                model_name="test-model",
+                tasks="gsm8k",
+            )
 
         assert "gsm8k_0|expr_gold_metric" in metrics
         assert metrics["gsm8k_0|expr_gold_metric"] == 0.42
         assert "gsm8k_0|some_other_metric" in metrics
         assert metrics["gsm8k_0|some_other_metric"] == 0.99
 
-    @patch("lighteval.pipeline.Pipeline")
-    @patch("lighteval.logging.evaluation_tracker.EvaluationTracker")
-    def test_run_lighteval_returns_empty_on_none_results(self, mock_tracker_cls, mock_pipeline_cls):
+    def test_run_lighteval_returns_empty_on_none_results(self):
         """Test that run_lighteval returns empty dict when results are None."""
         mock_pipeline = MagicMock()
         mock_pipeline.get_results.return_value = None
-        mock_pipeline_cls.return_value = mock_pipeline
+        components, _ = _mock_lighteval_components(mock_pipeline)
 
         model = MagicMock()
-        metrics = run_lighteval(model=model, model_name="test-model", tasks="gsm8k")
+        with patch(
+            "lora_finetune.evaluators.lighteval_evaluator._import_lighteval_components",
+            return_value=components,
+        ):
+            metrics = run_lighteval(model=model, model_name="test-model", tasks="gsm8k")
 
         assert metrics == {}
 
-    @patch("lighteval.pipeline.Pipeline")
-    @patch("lighteval.logging.evaluation_tracker.EvaluationTracker")
-    def test_run_lighteval_multiple_tasks(self, mock_tracker_cls, mock_pipeline_cls):
+    def test_run_lighteval_multiple_tasks(self):
         """Test that run_lighteval handles multiple tasks."""
         mock_pipeline = MagicMock()
         mock_pipeline.get_results.return_value = {
@@ -90,14 +118,18 @@ class TestRunLighteval:
                 "mmlu_0": {"accuracy": 0.65},
             }
         }
-        mock_pipeline_cls.return_value = mock_pipeline
+        components, _ = _mock_lighteval_components(mock_pipeline)
 
         model = MagicMock()
-        metrics = run_lighteval(
-            model=model,
-            model_name="test-model",
-            tasks="gsm8k,mmlu",
-        )
+        with patch(
+            "lora_finetune.evaluators.lighteval_evaluator._import_lighteval_components",
+            return_value=components,
+        ):
+            metrics = run_lighteval(
+                model=model,
+                model_name="test-model",
+                tasks="gsm8k,mmlu",
+            )
 
         assert "gsm8k_0|expr_gold_metric" in metrics
         assert "mmlu_0|accuracy" in metrics
@@ -133,6 +165,11 @@ class TestLightEvalCallback:
         assert callback.max_samples == 100
         assert callback.max_new_tokens == 512
         assert callback.batch_size == 1
+
+    def test_callback_rejects_non_positive_eval_steps(self):
+        """Test LightEvalCallback rejects invalid eval_steps."""
+        with pytest.raises(ValueError, match="greater than 0"):
+            LightEvalCallback(model_name="test-model", eval_steps=0)
 
     def test_callback_has_required_methods(self):
         """Test callback has TrainerCallback methods."""

@@ -307,6 +307,16 @@ class BenchmarkEvalConfig:
     )
     batch_size: int = field(default=1, metadata={"help": "Batch size for benchmark evaluation"})
 
+    def __post_init__(self):
+        if self.eval_steps <= 0:
+            raise ValueError("benchmark_eval.eval_steps must be greater than 0")
+        if self.batch_size <= 0:
+            raise ValueError("benchmark_eval.batch_size must be greater than 0")
+        if self.max_new_tokens <= 0:
+            raise ValueError("benchmark_eval.max_new_tokens must be greater than 0")
+        if self.num_samples is not None and self.num_samples <= 0:
+            raise ValueError("benchmark_eval.num_samples must be greater than 0 when provided")
+
 
 @dataclass
 class TrainingConfig:
@@ -434,6 +444,11 @@ class Config:
         """Load configuration from YAML file."""
         with open(path, "r") as f:
             config_dict = yaml.safe_load(f)
+
+        if config_dict is None:
+            config_dict = {}
+        elif not isinstance(config_dict, dict):
+            raise ValueError("Config file must contain a YAML mapping at the top level")
 
         model_config = ModelConfig(**config_dict.get("model", {}))
         lora_config = LoraConfig(**config_dict.get("lora", {}))

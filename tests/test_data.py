@@ -2,15 +2,18 @@
 
 import pytest
 import torch
+from datasets import Dataset, DatasetDict
 from PIL import Image
 from torchvision import transforms
 
-from lora_finetune.config import AugmentationConfig
+from lora_finetune.config import AugmentationConfig, DataConfig
 from lora_finetune.data.text_data import (
     CHAT_TEMPLATE,
     DEFAULT_PROMPT_TEMPLATE,
     format_instruction,
     get_text_collator,
+    load_text_dataset,
+    preprocess_text_dataset,
     tokenize_function,
 )
 from lora_finetune.data.vision_data import (
@@ -488,6 +491,55 @@ class TestLoadTextDataset:
 
         with pytest.raises(ValueError, match="Either dataset_name or train_file"):
             load_text_dataset(config)
+
+    def test_load_raises_for_streaming_eval_split_ratio(self):
+        """Test eval_split_ratio fails fast for streaming-like datasets."""
+        from unittest.mock import patch
+
+        class FakeIterableSplit:
+            pass
+
+        fake_dataset = {"train": FakeIterableSplit()}
+        config = DataConfig(dataset_name="dummy", streaming=True, eval_split_ratio=0.1)
+
+        with patch("lora_finetune.data.text_data.load_dataset", return_value=fake_dataset):
+            with pytest.raises(
+                ValueError, match="eval_split_ratio requires a non-streaming dataset"
+            ):
+                load_text_dataset(config)
+
+
+class TestPreprocessTextDataset:
+    """Tests for preprocess_text_dataset function."""
+
+    def test_instruction_formatting_respects_custom_text_column(self):
+        """Test instruction formatting writes to configured text_column."""
+
+        class MockTokenizer:
+            def __call__(self, texts, truncation, max_length, padding, return_tensors):
+                return {
+                    "input_ids": [[1, 2, 3] for _ in texts],
+                    "attention_mask": [[1, 1, 1] for _ in texts],
+                }
+
+        dataset = DatasetDict(
+            {
+                "train": Dataset.from_dict(
+                    {
+                        "instruction": ["Translate"],
+                        "input": ["hello"],
+                        "output": ["bonjour"],
+                    }
+                )
+            }
+        )
+        config = DataConfig(text_column="prompt", preprocessing_num_workers=1)
+
+        tokenized = preprocess_text_dataset(dataset, MockTokenizer(), config)
+
+        assert "train" in tokenized
+        assert len(tokenized["train"]) == 1
+        assert "input_ids" in tokenized["train"].column_names
 
 
 class TestPrepareDatasetForCausalLM:

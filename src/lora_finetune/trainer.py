@@ -548,6 +548,14 @@ def create_trainer(
     callbacks: Optional[List] = None,
 ) -> LoraTrainer:
     """Create trainer with all optimizations configured."""
+    eval_strategy = str(training_config.eval_strategy).lower()
+    if eval_strategy != "no" and eval_dataset is None:
+        raise ValueError(
+            "training.eval_strategy is set to evaluate, but no eval_dataset was provided. "
+            "Provide a validation split (e.g. data.eval_split_ratio or data.eval_dataset_name), "
+            "or set training.eval_strategy='no'."
+        )
+
     wandb_run_name = setup_wandb(training_config)
 
     # Generate unique run identifier for output directory
@@ -555,9 +563,15 @@ def create_trainer(
     training_config.output_dir = os.path.join(training_config.output_dir, run_id)
 
     logger.info(f"Creating trainer with output_dir={training_config.output_dir}")
-    logger.info(f"Train dataset size: {len(train_dataset)}")
-    if eval_dataset:
-        logger.info(f"Eval dataset size: {len(eval_dataset)}")
+    try:
+        logger.info(f"Train dataset size: {len(train_dataset)}")
+    except TypeError:
+        logger.info("Train dataset size: unknown (streaming/iterable dataset)")
+    if eval_dataset is not None:
+        try:
+            logger.info(f"Eval dataset size: {len(eval_dataset)}")
+        except TypeError:
+            logger.info("Eval dataset size: unknown (streaming/iterable dataset)")
 
     training_args = get_training_arguments(training_config, model_config)
     logger.info(

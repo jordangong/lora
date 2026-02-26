@@ -101,6 +101,25 @@ class _RichTqdmBridge:
         pass
 
 
+def _import_lighteval_components() -> Dict[str, Any]:
+    """Import lighteval modules lazily so callers can mock this in tests."""
+    import lighteval.models.transformers.transformers_model as transformers_model_module
+    from lighteval.logging.evaluation_tracker import EvaluationTracker
+    from lighteval.models.model_input import GenerationParameters
+    from lighteval.models.transformers.transformers_model import TransformersModelConfig
+    from lighteval.pipeline import ParallelismManager, Pipeline, PipelineParameters
+
+    return {
+        "EvaluationTracker": EvaluationTracker,
+        "GenerationParameters": GenerationParameters,
+        "TransformersModelConfig": TransformersModelConfig,
+        "ParallelismManager": ParallelismManager,
+        "Pipeline": Pipeline,
+        "PipelineParameters": PipelineParameters,
+        "transformers_model_module": transformers_model_module,
+    }
+
+
 def run_lighteval(
     model: PreTrainedModel,
     model_name: str,
@@ -127,21 +146,25 @@ def run_lighteval(
         Dictionary mapping metric names to values, e.g.
         {"gsm8k_0|expr_gold_metric": 0.42, ...}
     """
-    from lighteval.logging.evaluation_tracker import EvaluationTracker
-    from lighteval.models.model_input import GenerationParameters
-    from lighteval.models.transformers.transformers_model import TransformersModelConfig
-    from lighteval.pipeline import ParallelismManager, Pipeline, PipelineParameters
+    components = _import_lighteval_components()
+    evaluation_tracker_cls = components["EvaluationTracker"]
+    generation_parameters_cls = components["GenerationParameters"]
+    transformers_model_config_cls = components["TransformersModelConfig"]
+    parallelism_manager = components["ParallelismManager"]
+    pipeline_cls = components["Pipeline"]
+    pipeline_parameters_cls = components["PipelineParameters"]
+    transformers_model_module = components["transformers_model_module"]
 
-    model_config = TransformersModelConfig(
+    model_config = transformers_model_config_cls(
         model_name=model_name,
         batch_size=batch_size,
-        generation_parameters=GenerationParameters(
+        generation_parameters=generation_parameters_cls(
             max_new_tokens=max_new_tokens,
         ),
     )
 
-    pipeline_params = PipelineParameters(
-        launcher_type=ParallelismManager.NONE,
+    pipeline_params = pipeline_parameters_cls(
+        launcher_type=parallelism_manager.NONE,
         max_samples=max_samples,
     )
 
@@ -151,7 +174,7 @@ def run_lighteval(
         # which would return stale results during mid-training evaluation.
         model_config.cache_dir = tmpdir
 
-        evaluation_tracker = EvaluationTracker(
+        evaluation_tracker = evaluation_tracker_cls(
             output_dir=tmpdir,
             save_details=False,
             push_to_hub=False,
@@ -162,10 +185,11 @@ def run_lighteval(
         warn_console = rich_progress.console if rich_progress is not None else console
         warning_handler = _LightEvalWarningHandler(warn_console)
         saved_logging = _setup_lighteval_logging(warning_handler)
-        _orig_disable_tqdm = None
+        _orig_tqdm = None
+        results = None
 
         try:
-            pipeline = Pipeline(
+            pipeline = pipeline_cls(
                 tasks=tasks,
                 pipeline_parameters=pipeline_params,
                 evaluation_tracker=evaluation_tracker,
@@ -180,15 +204,15 @@ def run_lighteval(
             pipeline.model.cleanup = lambda: None
 
             # Replace lighteval's tqdm with our Rich bridge (or disable it)
-            import lighteval.models.transformers.transformers_model as _le_model_mod
-
-            _orig_tqdm = _le_model_mod.tqdm
+            _orig_tqdm = transformers_model_module.tqdm
             if rich_progress is not None:
-                _le_model_mod.tqdm = lambda iterable=None, **kw: _RichTqdmBridge(
+                transformers_model_module.tqdm = lambda iterable=None, **kw: _RichTqdmBridge(
                     iterable, progress=rich_progress, task_label=progress_label, **kw
                 )
             else:
-                _le_model_mod.tqdm = lambda iterable=None, **kw: _RichTqdmBridge(iterable, **kw)
+                transformers_model_module.tqdm = lambda iterable=None, **kw: _RichTqdmBridge(
+                    iterable, **kw
+                )
 
             with warnings.catch_warnings():
                 warnings.filterwarnings("ignore", message=".*generation flags are not valid.*")
@@ -197,7 +221,8 @@ def run_lighteval(
             results = pipeline.get_results()
         finally:
             _restore_lighteval_logging(saved_logging)
-            _le_model_mod.tqdm = _orig_tqdm
+            if _orig_tqdm is not None:
+                transformers_model_module.tqdm = _orig_tqdm
 
     if results is None:
         return {}
@@ -227,6 +252,9 @@ class LightEvalCallback(TrainerCallback):
         batch_size: int = 1,
         rich_progress_callback: Optional[Any] = None,
     ):
+        if eval_steps <= 0:
+            raise ValueError("LightEvalCallback eval_steps must be greater than 0")
+
         self.model_name = model_name
         self.tasks = tasks
         self.eval_steps = eval_steps
