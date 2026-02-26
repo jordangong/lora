@@ -42,7 +42,7 @@ def _setup_lighteval_logging(handler: logging.Handler) -> dict:
     for name in list(logging.Logger.manager.loggerDict):
         if name.startswith("lighteval"):
             lg = logging.getLogger(name)
-            saved[name] = (lg.handlers[:], lg.level)
+            saved[name] = (lg.handlers[:], lg.level, lg.propagate)
             lg.handlers = [handler]
             lg.setLevel(logging.WARNING)
             lg.propagate = False
@@ -51,11 +51,11 @@ def _setup_lighteval_logging(handler: logging.Handler) -> dict:
 
 def _restore_lighteval_logging(saved: dict) -> None:
     """Restore lighteval loggers to their saved state."""
-    for name, (handlers, level) in saved.items():
+    for name, (handlers, level, propagate) in saved.items():
         lg = logging.getLogger(name)
         lg.handlers = handlers
         lg.setLevel(level)
-        lg.propagate = True
+        lg.propagate = propagate
 
 
 class _RichTqdmBridge:

@@ -79,11 +79,17 @@ def suppress_warnings() -> None:
     transformers_logger = logging.getLogger("transformers")
     transformers_logger.handlers = [RichWarningHandler()]
     transformers_logger.setLevel(logging.WARNING)
+    transformers_logger.propagate = False
 
     # Also handle Python warnings module
     def _rich_showwarning(message, category, filename, lineno, file=None, line=None):
         msg = str(message)
-        if "not initialized" in msg or "You should probably TRAIN" in msg:
+        if (
+            "not initialized" in msg
+            or "You should probably TRAIN" in msg
+            or "generation flags are not valid" in msg
+            or not msg.strip()
+        ):
             return
         console.print(f"  [dim yellow]⚠ {msg}[/dim yellow]")
 

@@ -2,12 +2,14 @@
 
 import logging
 import random
+import warnings
 
 import numpy as np
 import pytest
 import torch
 
 from lora_finetune.utils import (
+    RichWarningHandler,
     check_bitsandbytes_available,
     check_flash_attention_available,
     count_parameters,
@@ -18,6 +20,7 @@ from lora_finetune.utils import (
     get_model_size,
     set_seed,
     setup_logging,
+    suppress_warnings,
 )
 
 
@@ -64,6 +67,51 @@ class TestSetupLogging:
         # Just verify the function accepts the level parameter without error
         logger = setup_logging(level="WARNING")
         assert logger is not None
+
+
+class TestSuppressWarnings:
+    """Tests for suppress_warnings function."""
+
+    def test_sets_transformers_logger_handler_and_disables_propagation(self):
+        """Ensure transformers warnings don't propagate to root handlers."""
+        transformers_logger = logging.getLogger("transformers")
+        original_handlers = transformers_logger.handlers[:]
+        original_level = transformers_logger.level
+        original_propagate = transformers_logger.propagate
+
+        try:
+            suppress_warnings()
+
+            assert len(transformers_logger.handlers) == 1
+            assert isinstance(transformers_logger.handlers[0], RichWarningHandler)
+            assert transformers_logger.propagate is False
+        finally:
+            transformers_logger.handlers = original_handlers
+            transformers_logger.setLevel(original_level)
+            transformers_logger.propagate = original_propagate
+
+    def test_showwarning_filters_generation_flags_warning(self, monkeypatch):
+        """Ensure non-actionable generation warnings are suppressed."""
+        original_showwarning = warnings.showwarning
+        captured = []
+
+        try:
+            suppress_warnings()
+            monkeypatch.setattr(
+                "lora_finetune.utils.console.print",
+                lambda message: captured.append(message),
+            )
+
+            warnings.showwarning(
+                "generation flags are not valid for this model",
+                UserWarning,
+                "test_file.py",
+                1,
+            )
+
+            assert captured == []
+        finally:
+            warnings.showwarning = original_showwarning
 
 
 class TestGetDevice:

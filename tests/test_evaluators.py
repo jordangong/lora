@@ -1,12 +1,13 @@
 """Tests for benchmark evaluators using lighteval."""
 
+import logging
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
 import torch
 
-from lora_finetune.evaluators import LightEvalCallback, run_lighteval
+from lora_finetune.evaluators import LightEvalCallback, lighteval_evaluator, run_lighteval
 
 
 def _mock_lighteval_components(mock_pipeline):
@@ -133,6 +134,31 @@ class TestRunLighteval:
 
         assert "gsm8k_0|expr_gold_metric" in metrics
         assert "mmlu_0|accuracy" in metrics
+
+
+class TestLightEvalLoggingHelpers:
+    """Tests for lighteval logging setup/restore helpers."""
+
+    def test_restore_preserves_logger_propagate(self):
+        """Ensure temporary warning routing does not mutate propagate permanently."""
+        logger = logging.getLogger("lighteval.test_logger")
+        original_handlers = logger.handlers[:]
+        original_level = logger.level
+        original_propagate = logger.propagate
+
+        try:
+            logger.propagate = False
+            handler = MagicMock()
+
+            saved = lighteval_evaluator._setup_lighteval_logging(handler)
+            assert logger.propagate is False
+
+            lighteval_evaluator._restore_lighteval_logging(saved)
+            assert logger.propagate is False
+        finally:
+            logger.handlers = original_handlers
+            logger.setLevel(original_level)
+            logger.propagate = original_propagate
 
 
 class TestLightEvalCallback:
