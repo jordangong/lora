@@ -3,6 +3,7 @@
 import logging
 import os
 import random
+import re
 import sys
 import warnings
 
@@ -11,8 +12,12 @@ import torch
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
 
 console = Console()
+
+ANSI_ESCAPE_RE = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
+ORPHAN_SGR_RE = re.compile(r"\[(?:\d{1,3}(?:;\d{1,3})*)m")
 
 # Display names for finetuning methods
 METHOD_DISPLAY_NAMES = {
@@ -31,11 +36,47 @@ def get_method_display_name(method: str) -> str:
     return METHOD_DISPLAY_NAMES.get(method, method.upper())
 
 
+def _normalize_warning_message(msg: str) -> str:
+    """Normalize warning message text for clean terminal rendering."""
+    cleaned = ANSI_ESCAPE_RE.sub("", msg)
+    cleaned = ORPHAN_SGR_RE.sub("", cleaned)
+    cleaned = cleaned.replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not cleaned:
+        return ""
+
+    # Transformers can emit a multiline LOAD REPORT with mismatched checkpoint keys.
+    # Summarize it to avoid awkward line wrapping and duplicated noise.
+    if "LOAD REPORT" in cleaned:
+        mismatched_keys = []
+        for line in cleaned.splitlines():
+            if "MISMATCH" not in line or "|" not in line:
+                continue
+            key = line.split("|", 1)[0].strip()
+            if key and key.lower() != "key":
+                mismatched_keys.append(key)
+
+        if mismatched_keys:
+            joined_keys = ", ".join(mismatched_keys)
+            return f"Checkpoint shape mismatch detected; reinitialized: {joined_keys}"
+        return "Checkpoint shape mismatch detected; some weights were reinitialized"
+
+    # Keep warnings compact and single-line.
+    lines = [line.strip() for line in cleaned.splitlines() if line.strip()]
+    return " ".join(lines)
+
+
+def _print_warning_message(msg: str) -> None:
+    """Render warning message with Rich without interpreting message markup."""
+    if not msg:
+        return
+    console.print(Text(f"  ⚠ {msg}", style="dim yellow"))
+
+
 class RichWarningHandler(logging.Handler):
     """Custom logging handler that formats warnings elegantly with Rich."""
 
     def emit(self, record):
-        msg = record.getMessage()
+        msg = _normalize_warning_message(record.getMessage())
 
         # Simplify common verbose warnings
         if "not initialized from the model checkpoint" in msg:
@@ -49,7 +90,7 @@ class RichWarningHandler(logging.Handler):
         elif not msg.strip():
             return
 
-        console.print(f"  [dim yellow]⚠ {msg}[/dim yellow]")
+        _print_warning_message(msg)
 
 
 def suppress_warnings() -> None:
@@ -83,7 +124,7 @@ def suppress_warnings() -> None:
 
     # Also handle Python warnings module
     def _rich_showwarning(message, category, filename, lineno, file=None, line=None):
-        msg = str(message)
+        msg = _normalize_warning_message(str(message))
         if (
             "not initialized" in msg
             or "You should probably TRAIN" in msg
@@ -91,7 +132,7 @@ def suppress_warnings() -> None:
             or not msg.strip()
         ):
             return
-        console.print(f"  [dim yellow]⚠ {msg}[/dim yellow]")
+        _print_warning_message(msg)
 
     warnings.showwarning = _rich_showwarning
 

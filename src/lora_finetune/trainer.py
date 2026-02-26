@@ -1,6 +1,7 @@
 """Custom trainer with performance optimizations."""
 
 import logging
+import math
 import os
 from datetime import datetime
 from typing import Callable, Dict, List, Optional, Union
@@ -97,7 +98,9 @@ class RichProgressCallback(TrainerCallback):
     def on_step_end(self, args, state, control, **kwargs):
         """Update progress bar on each step."""
         if self.progress and self.train_task is not None and not self.in_eval:
-            epoch = int(state.epoch) + 1 if state.epoch else 1
+            current_epoch = float(state.epoch or 0.0)
+            max_epochs = max(1, int(round(self.max_epochs)))
+            epoch = min(max_epochs, max(1, int(math.ceil(current_epoch))))
             self.progress.update(
                 self.train_task,
                 completed=state.global_step,

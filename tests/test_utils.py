@@ -10,6 +10,7 @@ import torch
 
 from lora_finetune.utils import (
     RichWarningHandler,
+    _normalize_warning_message,
     check_bitsandbytes_available,
     check_flash_attention_available,
     count_parameters,
@@ -112,6 +113,29 @@ class TestSuppressWarnings:
             assert captured == []
         finally:
             warnings.showwarning = original_showwarning
+
+    def test_normalize_warning_message_summarizes_load_report(self):
+        """Ensure multiline load reports are summarized to a compact single line."""
+        msg = (
+            "\x1b[1mViTForImageClassification LOAD REPORT\x1b[0m from: model\n"
+            "Key               | Status   | Info\n"
+            "classifier.weight | MISMATCH | Reinit\n"
+            "classifier.bias   | MISMATCH | Reinit\n"
+        )
+
+        normalized = _normalize_warning_message(msg)
+
+        assert normalized == (
+            "Checkpoint shape mismatch detected; reinitialized: classifier.weight, classifier.bias"
+        )
+
+    def test_normalize_warning_message_removes_ansi_and_newlines(self):
+        """Ensure ANSI artifacts and awkward line breaks are cleaned."""
+        msg = "[1mSome warning[0m\n  with extra spacing\n"
+
+        normalized = _normalize_warning_message(msg)
+
+        assert normalized == "Some warning with extra spacing"
 
 
 class TestGetDevice:
