@@ -1,6 +1,7 @@
 """Benchmark evaluation using HuggingFace lighteval."""
 
 import logging
+import os
 import tempfile
 import warnings
 from typing import Any, Dict, Optional
@@ -133,25 +134,34 @@ def run_lighteval(
     pipeline_parameters_cls = components["PipelineParameters"]
     transformers_model_module = components["transformers_model_module"]
 
-    model_config = transformers_model_config_cls(
-        model_name=model_name,
-        batch_size=batch_size,
-        generation_parameters=generation_parameters_cls(
-            max_new_tokens=max_new_tokens,
-        ),
-    )
-
     pipeline_params = pipeline_parameters_cls(
         launcher_type=parallelism_manager.NONE,
         max_samples=max_samples,
     )
 
     with tempfile.TemporaryDirectory() as tmpdir:
+        lighteval_model_name = model_name
+        tokenizer_name = None
+        expanded_model_name = os.path.expanduser(model_name)
+        if os.path.isabs(expanded_model_name) or os.path.exists(expanded_model_name):
+            lighteval_model_name = (
+                os.path.basename(os.path.normpath(expanded_model_name)) or "model"
+            )
+            tokenizer_name = model_name
+
+        model_config = transformers_model_config_cls(
+            model_name=lighteval_model_name,
+            tokenizer=tokenizer_name,
+            batch_size=batch_size,
+            generation_parameters=generation_parameters_cls(
+                max_new_tokens=max_new_tokens,
+            ),
+            cache_dir=tmpdir,
+        )
+
         # Use tmpdir as cache_dir so each evaluation gets a fresh SampleCache.
         # lighteval caches predictions to disk keyed by model config (not weights),
         # which would return stale results during mid-training evaluation.
-        model_config.cache_dir = tmpdir
-
         evaluation_tracker = evaluation_tracker_cls(
             output_dir=tmpdir,
             save_details=False,
