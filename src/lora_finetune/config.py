@@ -406,7 +406,7 @@ class TrainingConfig:
         default=None, metadata={"help": "Weights & Biases run name"}
     )
     wandb_watch: str = field(
-        default="gradients", metadata={"help": "W&B watch mode: gradients, all, or false"}
+        default="false", metadata={"help": "W&B watch mode: gradients, all, or false"}
     )
     wandb_log_model: bool = field(default=False, metadata={"help": "Log model to W&B"})
     run_name: Optional[str] = field(default=None, metadata={"help": "Run name for logging"})

@@ -261,6 +261,7 @@ class TestTrainingConfig:
         assert config.bf16 is True
         assert config.gradient_checkpointing is True
         assert config.optim == "adamw_torch_fused"
+        assert config.wandb_watch == "false"
 
     def test_custom_values(self):
         """Test custom training configuration values."""

@@ -321,6 +321,10 @@ def setup_wandb(config: TrainingConfig) -> Optional[str]:
         logger.warning("wandb not installed. Install with: pip install wandb")
         return None
 
+    wandb_watch = str(config.wandb_watch).strip().lower() if config.wandb_watch else "false"
+    os.environ["WANDB_WATCH"] = wandb_watch
+    os.environ["WANDB_LOG_MODEL"] = "true" if config.wandb_log_model else "false"
+
     if wandb.run is None:
         wandb.init(
             project=config.wandb_project or "lora-finetune",
@@ -333,12 +337,6 @@ def setup_wandb(config: TrainingConfig) -> Optional[str]:
                 "gradient_accumulation_steps": config.gradient_accumulation_steps,
             },
         )
-
-    if config.wandb_watch:
-        os.environ["WANDB_WATCH"] = config.wandb_watch
-
-    if config.wandb_log_model:
-        os.environ["WANDB_LOG_MODEL"] = "true"
 
     return wandb.run.name if wandb.run else None
 

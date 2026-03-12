@@ -1,6 +1,8 @@
 """Tests for trainer utilities."""
 
 import os
+import sys
+from types import ModuleType
 
 import numpy as np
 import pytest
@@ -18,6 +20,7 @@ from lora_finetune.trainer import (
     generate_run_id,
     get_training_arguments,
     prepare_model_for_training,
+    setup_wandb,
 )
 
 # Disable wandb for tests
@@ -669,6 +672,60 @@ class TestGenerateRunId:
         time.sleep(1.1)  # Wait for at least 1 second difference
         run_id2 = generate_run_id()
         assert run_id1 != run_id2
+
+
+class TestSetupWandb:
+    """Tests for setup_wandb function."""
+
+    def test_setup_wandb_disables_watch_by_default(self, monkeypatch):
+        """Test that setup_wandb clears stale watch settings by default."""
+        wandb_module = ModuleType("wandb")
+        wandb_module.run = None
+
+        def init(**kwargs):
+            wandb_module.run = type("Run", (), {"name": "dummy-run"})()
+
+        wandb_module.init = init
+
+        monkeypatch.setitem(sys.modules, "wandb", wandb_module)
+        monkeypatch.setenv("WANDB_WATCH", "gradients")
+        monkeypatch.setenv("WANDB_LOG_MODEL", "true")
+
+        config = TrainingConfig(report_to="wandb")
+
+        run_name = setup_wandb(config)
+
+        assert run_name == "dummy-run"
+        assert os.environ["WANDB_WATCH"] == "false"
+        assert os.environ["WANDB_LOG_MODEL"] == "false"
+
+    def test_setup_wandb_preserves_explicit_watch_settings(self, monkeypatch):
+        """Test that setup_wandb keeps explicit watch and log-model settings."""
+        wandb_module = ModuleType("wandb")
+        wandb_module.run = None
+        wandb_module.init_kwargs = None
+
+        def init(**kwargs):
+            wandb_module.init_kwargs = kwargs
+            wandb_module.run = type("Run", (), {"name": "explicit-run"})()
+
+        wandb_module.init = init
+
+        monkeypatch.setitem(sys.modules, "wandb", wandb_module)
+
+        config = TrainingConfig(
+            report_to="wandb",
+            wandb_run_name="test-run",
+            wandb_watch="all",
+            wandb_log_model=True,
+        )
+
+        run_name = setup_wandb(config)
+
+        assert run_name == "explicit-run"
+        assert wandb_module.init_kwargs["name"] == "test-run"
+        assert os.environ["WANDB_WATCH"] == "all"
+        assert os.environ["WANDB_LOG_MODEL"] == "true"
 
 
 class TestRichProgressCallback:
