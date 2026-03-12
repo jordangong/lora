@@ -6,6 +6,8 @@ import random
 import re
 import sys
 import warnings
+from dataclasses import dataclass
+from typing import Optional, Sequence
 
 import numpy as np
 import torch
@@ -29,6 +31,38 @@ METHOD_DISPLAY_NAMES = {
     "prefix_tuning": "Prefix Tuning",
     "full": "Full Finetuning",
 }
+
+
+@dataclass(frozen=True)
+class WarningRule:
+    contains_any: tuple[str, ...] = ()
+    contains_all: tuple[str, ...] = ()
+    logger_names: tuple[str, ...] = ()
+    replacement: Optional[str] = None
+    suppress: bool = False
+
+
+WARNING_RULES = (
+    WarningRule(
+        contains_any=("not initialized from the model checkpoint",),
+        replacement="Some model weights were randomly initialized (expected for fine-tuning)",
+    ),
+    WarningRule(
+        contains_any=("Fast image processor", "slow image processor"),
+        replacement="Using standard image processor (fast processor available with use_fast=True)",
+    ),
+    WarningRule(contains_any=("You should probably TRAIN",), suppress=True),
+    WarningRule(contains_any=("generation flags are not valid",), suppress=True),
+    WarningRule(
+        contains_any=("unauthenticated requests to the HF Hub",),
+        replacement="HF Hub requests are unauthenticated; set HF_TOKEN for higher rate limits and faster downloads",
+    ),
+    WarningRule(
+        contains_all=("Detected kernel version", "below the recommended minimum of"),
+        logger_names=("accelerate",),
+        replacement="Kernel version is below Accelerate's recommended minimum and may cause hangs",
+    ),
+)
 
 
 def get_method_display_name(method: str) -> str:
@@ -65,32 +99,101 @@ def _normalize_warning_message(msg: str) -> str:
     return " ".join(lines)
 
 
-def _print_warning_message(msg: str) -> None:
+def _warning_rule_matches(msg: str, logger_name: str, rule: WarningRule) -> bool:
+    if rule.logger_names and not any(
+        logger_name == name or logger_name.startswith(f"{name}.") for name in rule.logger_names
+    ):
+        return False
+    if rule.contains_all and not all(text in msg for text in rule.contains_all):
+        return False
+    if rule.contains_any and not any(text in msg for text in rule.contains_any):
+        return False
+    return bool(rule.contains_any or rule.contains_all)
+
+
+def format_warning_message(
+    msg: str,
+    *,
+    logger_name: str = "",
+    extra_rules: Sequence[WarningRule] = (),
+) -> Optional[str]:
+    formatted = _normalize_warning_message(msg)
+    if not formatted:
+        return None
+
+    for rule in (*extra_rules, *WARNING_RULES):
+        if not _warning_rule_matches(formatted, logger_name, rule):
+            continue
+        if rule.suppress:
+            return None
+        if rule.replacement is not None:
+            return rule.replacement
+
+    return formatted
+
+
+def _print_warning_message(msg: str, rich_console: Optional[Console] = None) -> None:
     """Render warning message with Rich without interpreting message markup."""
     if not msg:
         return
-    console.print(Text(f"  ⚠ {msg}", style="dim yellow"))
+    target_console = rich_console or console
+    target_console.print(Text(f"  ⚠ {msg}", style="dim yellow"))
 
 
 class RichWarningHandler(logging.Handler):
     """Custom logging handler that formats warnings elegantly with Rich."""
 
-    def emit(self, record):
-        msg = _normalize_warning_message(record.getMessage())
+    def __init__(
+        self, rich_console: Optional[Console] = None, extra_rules: Sequence[WarningRule] = ()
+    ):
+        super().__init__()
+        self._console = rich_console or console
+        self._extra_rules = tuple(extra_rules)
 
-        # Simplify common verbose warnings
-        if "not initialized from the model checkpoint" in msg:
-            msg = "Some model weights were randomly initialized (expected for fine-tuning)"
-        elif "Fast image processor" in msg or "slow image processor" in msg:
-            msg = "Using standard image processor (fast processor available with use_fast=True)"
-        elif "You should probably TRAIN" in msg:
-            return  # Skip this one, it's obvious
-        elif "generation flags are not valid" in msg:
-            return  # Triggered by lighteval's default temperature=0, not actionable
-        elif not msg.strip():
+    def emit(self, record):
+        msg = format_warning_message(
+            record.getMessage(),
+            logger_name=record.name,
+            extra_rules=self._extra_rules,
+        )
+        if msg is None:
             return
 
-        _print_warning_message(msg)
+        _print_warning_message(msg, self._console)
+
+
+def configure_warning_loggers(
+    logger_names: Sequence[str],
+    handler: logging.Handler,
+    saved: Optional[dict] = None,
+) -> dict:
+    saved = {} if saved is None else saved
+    names_to_configure = set(logger_names)
+
+    for name in list(logging.Logger.manager.loggerDict):
+        if any(
+            name == logger_name or name.startswith(f"{logger_name}.")
+            for logger_name in logger_names
+        ):
+            names_to_configure.add(name)
+
+    for name in sorted(names_to_configure):
+        lg = logging.getLogger(name)
+        if name not in saved:
+            saved[name] = (lg.handlers[:], lg.level, lg.propagate)
+        lg.handlers = [handler]
+        lg.setLevel(logging.WARNING)
+        lg.propagate = False
+
+    return saved
+
+
+def restore_logger_configuration(saved: dict) -> None:
+    for name, (handlers, level, propagate) in saved.items():
+        lg = logging.getLogger(name)
+        lg.handlers = handlers
+        lg.setLevel(level)
+        lg.propagate = propagate
 
 
 def suppress_warnings() -> None:
@@ -117,22 +220,15 @@ def suppress_warnings() -> None:
         pass
 
     # Replace transformers logger handlers with our Rich handler
-    transformers_logger = logging.getLogger("transformers")
-    transformers_logger.handlers = [RichWarningHandler()]
-    transformers_logger.setLevel(logging.WARNING)
-    transformers_logger.propagate = False
+    handler = RichWarningHandler()
+    configure_warning_loggers(
+        ["transformers", "datasets", "accelerate", "huggingface_hub", "py.warnings"],
+        handler,
+    )
 
     # Also handle Python warnings module
     def _rich_showwarning(message, category, filename, lineno, file=None, line=None):
-        msg = _normalize_warning_message(str(message))
-        if (
-            "not initialized" in msg
-            or "You should probably TRAIN" in msg
-            or "generation flags are not valid" in msg
-            or not msg.strip()
-        ):
-            return
-        _print_warning_message(msg)
+        logging.getLogger("py.warnings").warning(str(message))
 
     warnings.showwarning = _rich_showwarning
 
@@ -150,6 +246,7 @@ def setup_logging(level: str = "WARNING") -> logging.Logger:
     logging.getLogger("transformers").setLevel(logging.WARNING)
     logging.getLogger("datasets").setLevel(logging.WARNING)
     logging.getLogger("accelerate").setLevel(logging.WARNING)
+    logging.getLogger("huggingface_hub").setLevel(logging.WARNING)
 
     logger = logging.getLogger(__name__)
     return logger

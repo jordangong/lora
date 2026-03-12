@@ -148,12 +148,12 @@ class TestLightEvalLoggingHelpers:
 
         try:
             logger.propagate = False
-            handler = MagicMock()
+            handler = logging.NullHandler()
 
-            saved = lighteval_evaluator._setup_lighteval_logging(handler)
+            saved = lighteval_evaluator.configure_warning_loggers(["lighteval"], handler)
             assert logger.propagate is False
 
-            lighteval_evaluator._restore_lighteval_logging(saved)
+            lighteval_evaluator.restore_logger_configuration(saved)
             assert logger.propagate is False
         finally:
             logger.handlers = original_handlers

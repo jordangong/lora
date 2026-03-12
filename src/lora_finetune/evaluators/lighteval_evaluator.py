@@ -11,51 +11,29 @@ from transformers import PreTrainedModel
 from transformers.trainer_callback import TrainerCallback, TrainerControl, TrainerState
 from transformers.training_args import TrainingArguments
 
+from ..utils import (
+    RichWarningHandler,
+    WarningRule,
+    configure_warning_loggers,
+    restore_logger_configuration,
+)
+
 logger = logging.getLogger(__name__)
 console = Console()
 
 
-class _LightEvalWarningHandler(logging.Handler):
-    """Logging handler that formats lighteval warnings elegantly with Rich."""
-
-    def __init__(self, rich_console: Console):
-        super().__init__()
-        self._console = rich_console
-
-    def emit(self, record):
-        msg = record.getMessage()
-
-        # Simplify common verbose lighteval warnings
-        if "max_samples WAS SET" in msg:
-            msg = "Benchmark eval using partial samples (--max_samples set)"
-        elif "cannot select the number of dataset splits" in msg:
-            msg = "Auto-selecting dataset splits for generative evaluation"
-        elif not msg.strip():
-            return
-
-        self._console.print(f"  [dim yellow]⚠ {msg}[/dim yellow]")
-
-
-def _setup_lighteval_logging(handler: logging.Handler) -> dict:
-    """Route lighteval loggers through the given handler. Returns saved state."""
-    saved = {}
-    for name in list(logging.Logger.manager.loggerDict):
-        if name.startswith("lighteval"):
-            lg = logging.getLogger(name)
-            saved[name] = (lg.handlers[:], lg.level, lg.propagate)
-            lg.handlers = [handler]
-            lg.setLevel(logging.WARNING)
-            lg.propagate = False
-    return saved
-
-
-def _restore_lighteval_logging(saved: dict) -> None:
-    """Restore lighteval loggers to their saved state."""
-    for name, (handlers, level, propagate) in saved.items():
-        lg = logging.getLogger(name)
-        lg.handlers = handlers
-        lg.setLevel(level)
-        lg.propagate = propagate
+LIGHTEVAL_WARNING_RULES = (
+    WarningRule(
+        contains_any=("max_samples WAS SET",),
+        replacement="Benchmark eval using partial samples (--max_samples set)",
+        logger_names=("lighteval",),
+    ),
+    WarningRule(
+        contains_any=("cannot select the number of dataset splits",),
+        replacement="Auto-selecting dataset splits for generative evaluation",
+        logger_names=("lighteval",),
+    ),
+)
 
 
 class _RichTqdmBridge:
@@ -183,8 +161,8 @@ def run_lighteval(
         # Route lighteval warnings through our Rich handler.
         # Use rich_progress.console if available so prints don't duplicate the live bar.
         warn_console = rich_progress.console if rich_progress is not None else console
-        warning_handler = _LightEvalWarningHandler(warn_console)
-        saved_logging = _setup_lighteval_logging(warning_handler)
+        warning_handler = RichWarningHandler(warn_console, extra_rules=LIGHTEVAL_WARNING_RULES)
+        saved_logging = configure_warning_loggers(["lighteval"], warning_handler)
         _orig_tqdm = None
         results = None
 
@@ -198,7 +176,7 @@ def run_lighteval(
             )
 
             # Capture any loggers created during Pipeline init
-            saved_logging.update(_setup_lighteval_logging(warning_handler))
+            configure_warning_loggers(["lighteval"], warning_handler, saved=saved_logging)
 
             # Prevent cleanup() from deleting the model (we still need it for training)
             pipeline.model.cleanup = lambda: None
@@ -220,7 +198,7 @@ def run_lighteval(
 
             results = pipeline.get_results()
         finally:
-            _restore_lighteval_logging(saved_logging)
+            restore_logger_configuration(saved_logging)
             if _orig_tqdm is not None:
                 transformers_model_module.tqdm = _orig_tqdm
 
