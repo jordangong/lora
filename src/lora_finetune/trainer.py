@@ -5,7 +5,7 @@ import logging
 import math
 import os
 from datetime import datetime
-from typing import Callable, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Union
 
 import numpy as np
 from peft import PeftModel
@@ -30,8 +30,9 @@ from transformers import (
 from transformers.trainer_callback import PrinterCallback, TrainerCallback
 
 try:
-    from trl import SFTTrainer
+    from trl import SFTConfig, SFTTrainer
 except ImportError:
+    SFTConfig = None
     SFTTrainer = None
 
 from .config import LoraConfig, ModelConfig, TrainingConfig
@@ -59,9 +60,7 @@ class RichProgressCallback(TrainerCallback):
             if not torch.cuda.is_available():
                 return
 
-            table = Table(
-                title="GPU Memory", show_header=True, header_style="bold cyan"
-            )
+            table = Table(title="GPU Memory", show_header=True, header_style="bold cyan")
             table.add_column("GPU", style="dim")
             table.add_column("Allocated", justify="right")
             table.add_column("Reserved", justify="right")
@@ -88,9 +87,7 @@ class RichProgressCallback(TrainerCallback):
         """Initialize progress bar at training start."""
         # Show GPU memory now that model is on device
         self._print_gpu_memory()
-        console.print(
-            Panel("[bold green]Training Started[/bold green]", border_style="green")
-        )
+        console.print(Panel("[bold green]Training Started[/bold green]", border_style="green"))
 
         self.max_epochs = args.num_train_epochs
         self.progress = Progress(
@@ -231,9 +228,7 @@ class RichProgressCallback(TrainerCallback):
             if train_runtime:
                 hours, remainder = divmod(int(train_runtime), 3600)
                 minutes, seconds = divmod(remainder, 60)
-                table.add_row(
-                    "Training time", f"{hours:02d}:{minutes:02d}:{seconds:02d}"
-                )
+                table.add_row("Training time", f"{hours:02d}:{minutes:02d}:{seconds:02d}")
 
             if train_loss is not None:
                 table.add_row("Final loss", f"{train_loss:.4f}")
@@ -256,11 +251,10 @@ class RichProgressCallback(TrainerCallback):
         )
 
 
-def get_training_arguments(
+def _get_training_arguments_kwargs(
     config: TrainingConfig,
     model_config: ModelConfig,
-) -> TrainingArguments:
-    """Create TrainingArguments from config with performance optimizations."""
+) -> Dict[str, Any]:
     fsdp_config = None
     if config.fsdp:
         fsdp_config = {
@@ -281,51 +275,81 @@ def get_training_arguments(
     if config.gradient_checkpointing and gradient_checkpointing_kwargs is None:
         gradient_checkpointing_kwargs = {"use_reentrant": False}
 
-    training_args = TrainingArguments(
-        output_dir=config.output_dir,
-        num_train_epochs=config.num_train_epochs,
-        per_device_train_batch_size=config.per_device_train_batch_size,
-        per_device_eval_batch_size=config.per_device_eval_batch_size,
-        gradient_accumulation_steps=config.gradient_accumulation_steps,
-        learning_rate=config.learning_rate,
-        weight_decay=config.weight_decay,
-        warmup_ratio=config.warmup_ratio,
-        warmup_steps=config.warmup_steps,
-        max_grad_norm=config.max_grad_norm,
-        lr_scheduler_type=config.lr_scheduler_type,
-        logging_steps=config.logging_steps,
-        save_steps=config.save_steps,
-        save_total_limit=config.save_total_limit,
-        eval_steps=config.eval_steps,
-        eval_strategy=config.eval_strategy,
-        prediction_loss_only=config.prediction_loss_only,
-        save_strategy=config.save_strategy,
-        load_best_model_at_end=config.load_best_model_at_end,
-        metric_for_best_model=config.metric_for_best_model,
-        greater_is_better=config.greater_is_better,
-        bf16=config.bf16,
-        fp16=config.fp16,
-        tf32=config.tf32,
-        gradient_checkpointing=config.gradient_checkpointing,
-        gradient_checkpointing_kwargs=gradient_checkpointing_kwargs,
-        optim=config.optim,
-        seed=config.seed,
-        data_seed=config.data_seed,
-        dataloader_num_workers=config.dataloader_num_workers,
-        dataloader_pin_memory=config.dataloader_pin_memory,
-        remove_unused_columns=config.remove_unused_columns,
-        report_to=config.report_to if config.report_to else "none",
-        run_name=config.run_name or config.wandb_run_name,
-        fsdp=config.fsdp,
-        fsdp_config=fsdp_config,
-        deepspeed=config.deepspeed,
-        local_rank=config.local_rank,
-        ddp_find_unused_parameters=config.ddp_find_unused_parameters,
-        resume_from_checkpoint=config.resume_from_checkpoint,
-        hub_model_id=config.hub_model_id,
-        push_to_hub=config.push_to_hub,
-        hub_token=config.hub_token,
-    )
+    return {
+        "output_dir": config.output_dir,
+        "num_train_epochs": config.num_train_epochs,
+        "per_device_train_batch_size": config.per_device_train_batch_size,
+        "per_device_eval_batch_size": config.per_device_eval_batch_size,
+        "gradient_accumulation_steps": config.gradient_accumulation_steps,
+        "learning_rate": config.learning_rate,
+        "weight_decay": config.weight_decay,
+        "warmup_ratio": config.warmup_ratio,
+        "warmup_steps": config.warmup_steps,
+        "max_grad_norm": config.max_grad_norm,
+        "lr_scheduler_type": config.lr_scheduler_type,
+        "logging_steps": config.logging_steps,
+        "save_steps": config.save_steps,
+        "save_total_limit": config.save_total_limit,
+        "eval_steps": config.eval_steps,
+        "eval_strategy": config.eval_strategy,
+        "prediction_loss_only": config.prediction_loss_only,
+        "save_strategy": config.save_strategy,
+        "load_best_model_at_end": config.load_best_model_at_end,
+        "metric_for_best_model": config.metric_for_best_model,
+        "greater_is_better": config.greater_is_better,
+        "bf16": config.bf16,
+        "fp16": config.fp16,
+        "tf32": config.tf32,
+        "gradient_checkpointing": config.gradient_checkpointing,
+        "gradient_checkpointing_kwargs": gradient_checkpointing_kwargs,
+        "optim": config.optim,
+        "seed": config.seed,
+        "data_seed": config.data_seed,
+        "dataloader_num_workers": config.dataloader_num_workers,
+        "dataloader_pin_memory": config.dataloader_pin_memory,
+        "remove_unused_columns": config.remove_unused_columns,
+        "report_to": config.report_to if config.report_to else "none",
+        "run_name": config.run_name or config.wandb_run_name,
+        "fsdp": config.fsdp,
+        "fsdp_config": fsdp_config,
+        "deepspeed": config.deepspeed,
+        "local_rank": config.local_rank,
+        "ddp_find_unused_parameters": config.ddp_find_unused_parameters,
+        "resume_from_checkpoint": config.resume_from_checkpoint,
+        "hub_model_id": config.hub_model_id,
+        "push_to_hub": config.push_to_hub,
+        "hub_token": config.hub_token,
+    }
+
+
+def get_training_arguments(
+    config: TrainingConfig,
+    model_config: ModelConfig,
+) -> TrainingArguments:
+    """Create TrainingArguments from config with performance optimizations."""
+    return TrainingArguments(**_get_training_arguments_kwargs(config, model_config))
+
+
+def get_sft_training_arguments(
+    config: TrainingConfig,
+    model_config: ModelConfig,
+):
+    if SFTConfig is None:
+        raise ImportError(
+            "TRL is required for causal LM finetuning. Install it with: pip install trl"
+        )
+
+    training_args = SFTConfig(**_get_training_arguments_kwargs(config, model_config))
+    dataset_kwargs = getattr(training_args, "dataset_kwargs", None) or {}
+    dataset_kwargs["skip_prepare_dataset"] = True
+    training_args.dataset_kwargs = dataset_kwargs
+
+    if hasattr(training_args, "packing"):
+        training_args.packing = False
+    if hasattr(training_args, "eval_packing") and training_args.eval_packing is None:
+        training_args.eval_packing = False
+    if hasattr(training_args, "dataset_text_field") and training_args.dataset_text_field is None:
+        training_args.dataset_text_field = "text"
 
     return training_args
 
@@ -346,9 +370,7 @@ def setup_wandb(config: TrainingConfig) -> Optional[str]:
         logger.warning("wandb not installed. Install with: pip install wandb")
         return None
 
-    wandb_watch = (
-        str(config.wandb_watch).strip().lower() if config.wandb_watch else "false"
-    )
+    wandb_watch = str(config.wandb_watch).strip().lower() if config.wandb_watch else "false"
     os.environ["WANDB_WATCH"] = wandb_watch
     os.environ["WANDB_LOG_MODEL"] = "true" if config.wandb_log_model else "false"
 
@@ -375,9 +397,7 @@ class LoraTrainerMixin:
 
     def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
         """Compute loss with optional label smoothing."""
-        return super().compute_loss(
-            model, inputs, return_outputs=return_outputs, **kwargs
-        )
+        return super().compute_loss(model, inputs, return_outputs=return_outputs, **kwargs)
 
     def create_optimizer(self):
         """Create optimizer with LoRA+ support for different learning rates."""
@@ -431,9 +451,7 @@ class LoraTrainerMixin:
                 "params": [
                     p
                     for n, p in self.model.named_parameters()
-                    if p.requires_grad
-                    and "lora_B" not in n
-                    and n not in decay_parameters
+                    if p.requires_grad and "lora_B" not in n and n not in decay_parameters
                 ],
                 "weight_decay": 0.0,
                 "lr": base_lr,
@@ -445,9 +463,7 @@ class LoraTrainerMixin:
             group for group in optimizer_grouped_parameters if len(group["params"]) > 0
         ]
 
-        optimizer_cls, optimizer_kwargs = Trainer.get_optimizer_cls_and_kwargs(
-            self.args
-        )
+        optimizer_cls, optimizer_kwargs = Trainer.get_optimizer_cls_and_kwargs(self.args)
         # Remove lr from kwargs since we set it per group
         optimizer_kwargs.pop("lr", None)
 
@@ -484,9 +500,7 @@ class LoraTrainerMixin:
             metric_key_prefix=metric_key_prefix,
         )
 
-    def save_model(
-        self, output_dir: Optional[str] = None, _internal_call: bool = False
-    ):
+    def save_model(self, output_dir: Optional[str] = None, _internal_call: bool = False):
         """Save model, handling PEFT models correctly."""
         output_dir = output_dir if output_dir is not None else self.args.output_dir
         os.makedirs(output_dir, exist_ok=True)
@@ -601,7 +615,16 @@ def create_trainer(
         except TypeError:
             logger.info("Eval dataset size: unknown (streaming/iterable dataset)")
 
-    training_args = get_training_arguments(training_config, model_config)
+    use_trl_sft = training_config.llm_trainer == "trl" and model_config.model_type == "causal_lm"
+    if use_trl_sft:
+        if LoraSFTTrainer is None or SFTConfig is None:
+            raise ImportError(
+                "TRL is required for causal LM finetuning. Install it with: pip install trl"
+            )
+        training_args = get_sft_training_arguments(training_config, model_config)
+        logger.info("Using TRL SFTTrainer for causal LM finetuning")
+    else:
+        training_args = get_training_arguments(training_config, model_config)
     logger.info(
         f"Training args: epochs={training_args.num_train_epochs}, batch_size={training_args.per_device_train_batch_size}, lr={training_args.learning_rate}"
     )
@@ -618,9 +641,6 @@ def create_trainer(
     # Disable default transformers progress bar (we use Rich instead)
     training_args.disable_tqdm = True
 
-    use_trl_sft = (
-        training_config.llm_trainer == "trl" and model_config.model_type == "causal_lm"
-    )
     trainer_kwargs = {
         "model": model,
         "args": training_args,
@@ -633,11 +653,6 @@ def create_trainer(
     }
 
     if use_trl_sft:
-        if LoraSFTTrainer is None:
-            raise ImportError(
-                "TRL is required for causal LM finetuning. Install it with: pip install trl"
-            )
-        logger.info("Using TRL SFTTrainer for causal LM finetuning")
         sft_signature = inspect.signature(SFTTrainer.__init__).parameters
         if "processing_class" in sft_signature:
             trainer_kwargs["processing_class"] = processing_class
@@ -659,9 +674,7 @@ def enable_gradient_checkpointing(model: PreTrainedModel) -> PreTrainedModel:
     if hasattr(model, "gradient_checkpointing_enable"):
         # Disable use_cache as it's incompatible with gradient checkpointing
         model.config.use_cache = False
-        model.gradient_checkpointing_enable(
-            gradient_checkpointing_kwargs={"use_reentrant": False}
-        )
+        model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
         logger.info("Gradient checkpointing enabled")
     elif hasattr(model, "enable_input_require_grads"):
         model.enable_input_require_grads()

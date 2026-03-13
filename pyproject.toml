@@ -69,6 +69,7 @@ select = ["E", "F", "W", "I", "N"]
 ignore = ["E501"]
 
 [tool.uv]
+no-build-isolation-package = ["flash-attn"]
 # Default to CUDA 12.6. Override with: UV_INDEX=pytorch-cu128 uv sync
 # Available: pytorch-cu126, pytorch-cu128, pytorch-cu130
 
