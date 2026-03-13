@@ -888,6 +888,40 @@ class TestRichProgressCallback:
         assert callback.progress.removed_tasks == [7]
         assert printed == ["  [bold]Eval[/bold] @ epoch ?: [green]loss[/green]=1.2345"]
 
+    def test_on_evaluate_falls_back_to_state_epoch_when_metrics_omit_epoch(self):
+        """Test on_evaluate uses state.epoch when eval metrics omit epoch."""
+        callback = RichProgressCallback()
+        printed = []
+
+        class FakeConsole:
+            def print(self, message):
+                printed.append(message)
+
+        class FakeProgress:
+            def __init__(self):
+                self.console = FakeConsole()
+                self.removed_tasks = []
+
+            def remove_task(self, task_id):
+                self.removed_tasks.append(task_id)
+
+        class FakeState:
+            epoch = 2.0
+
+        callback.progress = FakeProgress()
+        callback.eval_task = 9
+
+        callback.on_evaluate(
+            args=None,
+            state=FakeState(),
+            control=None,
+            metrics={"eval_loss": 0.8464},
+        )
+
+        assert callback.eval_task is None
+        assert callback.progress.removed_tasks == [9]
+        assert printed == ["  [bold]Eval[/bold] @ epoch 2.00: [green]loss[/green]=0.8464"]
+
 
 class TestCreateTrainer:
     """Tests for create_trainer function."""

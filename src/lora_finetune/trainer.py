@@ -188,7 +188,7 @@ class RichProgressCallback(TrainerCallback):
                 if isinstance(value, float):
                     parts.append(f"[green]{name}[/green]={value:.4f}")
 
-        epoch = metrics.get("epoch", "?")
+        epoch = metrics.get("epoch", state.epoch if state is not None else "?")
         if self.progress:
             self.progress.console.print(
                 f"  [bold]Eval[/bold] @ epoch {self._format_epoch(epoch)}: " + "  ".join(parts)
