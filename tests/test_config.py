@@ -4,6 +4,7 @@ import os
 import tempfile
 
 import yaml
+
 from lora_finetune.config import (
     AugmentationConfig,
     BenchmarkEvalConfig,
@@ -229,7 +230,9 @@ class TestDataConfig:
         assert config.image_size == 224
         assert config.streaming is False
         assert config.response_only_loss is True
+        assert config.assistant_only_loss is False
         assert config.append_eos_token is True
+        assert config.eos_token is None
 
     def test_custom_values(self):
         """Test custom data configuration values."""
@@ -238,13 +241,17 @@ class TestDataConfig:
             max_seq_length=4096,
             preprocessing_num_workers=8,
             response_only_loss=False,
+            assistant_only_loss=True,
             append_eos_token=False,
+            eos_token="<eos>",
         )
         assert config.dataset_name == "tatsu-lab/alpaca"
         assert config.max_seq_length == 4096
         assert config.preprocessing_num_workers == 8
         assert config.response_only_loss is False
+        assert config.assistant_only_loss is True
         assert config.append_eos_token is False
+        assert config.eos_token == "<eos>"
 
     def test_augmentation_nested(self):
         """Test nested augmentation config."""

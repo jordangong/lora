@@ -13,7 +13,9 @@ from .config import BenchmarkEvalConfig, Config
 from .data.text_data import (
     get_text_collator,
     load_text_dataset,
+    prepare_text_dataset_for_trl,
     preprocess_text_dataset,
+    requires_trl_native_dataset,
 )
 from .data.vision_data import (
     get_vision_collator,
@@ -42,9 +44,7 @@ console = Console()
 logger = logging.getLogger(__name__)
 
 
-def run_benchmark_eval(
-    model, model_name: str, eval_config: BenchmarkEvalConfig
-) -> None:
+def run_benchmark_eval(model, model_name: str, eval_config: BenchmarkEvalConfig) -> None:
     """Run benchmark evaluation after training using lighteval."""
     console.print(Panel("[bold blue]Running Benchmark Evaluation[/bold blue]"))
 
@@ -77,9 +77,7 @@ def train_llm(config: Config) -> None:
             "k_proj",
             "o_proj",
         ]:
-            config.lora.target_modules = get_llm_target_modules(
-                config.model.model_name_or_path
-            )
+            config.lora.target_modules = get_llm_target_modules(config.model.model_name_or_path)
 
         is_quantized = config.model.load_in_4bit or config.model.load_in_8bit
         model = get_peft_model_with_lora(
@@ -95,19 +93,29 @@ def train_llm(config: Config) -> None:
 
     with Status("[bold blue]Loading dataset...", console=console):
         dataset = load_text_dataset(config.data)
-        tokenized_dataset = preprocess_text_dataset(
-            dataset,
-            tokenizer,
-            config.data,
-            shuffle_seed=config.training.data_seed,
+        use_trl_native_dataset = config.training.llm_trainer == "trl" and (
+            config.data.append_eos_token or requires_trl_native_dataset(dataset)
         )
+        if use_trl_native_dataset:
+            prepared_dataset = prepare_text_dataset_for_trl(
+                dataset,
+                config.data,
+                shuffle_seed=config.training.data_seed,
+            )
+        else:
+            prepared_dataset = preprocess_text_dataset(
+                dataset,
+                tokenizer,
+                config.data,
+                shuffle_seed=config.training.data_seed,
+            )
 
-    train_dataset = tokenized_dataset[config.data.train_split]
+    train_dataset = prepared_dataset[config.data.train_split]
     eval_dataset = None
-    if config.data.validation_split in tokenized_dataset:
-        eval_dataset = tokenized_dataset[config.data.validation_split]
+    if config.data.validation_split in prepared_dataset:
+        eval_dataset = prepared_dataset[config.data.validation_split]
 
-    data_collator = get_text_collator(tokenizer)
+    data_collator = None if use_trl_native_dataset else get_text_collator(tokenizer)
 
     # Use perplexity metric for LLM evaluation if eval dataset exists
     compute_metrics = compute_metrics_for_lm if eval_dataset is not None else None
@@ -133,6 +141,7 @@ def train_llm(config: Config) -> None:
         training_config=config.training,
         model_config=config.model,
         train_dataset=train_dataset,
+        data_config=config.data,
         eval_dataset=eval_dataset,
         processing_class=tokenizer,
         data_collator=data_collator,
@@ -152,9 +161,7 @@ def train_llm(config: Config) -> None:
 
     # Run benchmark evaluation if enabled
     if config.benchmark_eval.enabled:
-        run_benchmark_eval(
-            model, config.model.model_name_or_path, config.benchmark_eval
-        )
+        run_benchmark_eval(model, config.model.model_name_or_path, config.benchmark_eval)
 
 
 def train_vision(config: Config) -> None:
@@ -168,9 +175,7 @@ def train_vision(config: Config) -> None:
         num_labels = get_num_labels_from_dataset(dataset[config.data.train_split])
 
     with Status("[bold blue]Loading model...", console=console):
-        model, image_processor = load_model_and_tokenizer(
-            config.model, num_labels=num_labels
-        )
+        model, image_processor = load_model_and_tokenizer(config.model, num_labels=num_labels)
 
         if config.lora.target_modules is None or config.lora.target_modules == [
             "q_proj",
@@ -178,9 +183,7 @@ def train_vision(config: Config) -> None:
             "k_proj",
             "o_proj",
         ]:
-            config.lora.target_modules = get_vision_target_modules(
-                config.model.model_name_or_path
-            )
+            config.lora.target_modules = get_vision_target_modules(config.model.model_name_or_path)
 
         is_quantized = config.model.load_in_4bit or config.model.load_in_8bit
         model = get_peft_model_with_lora(
@@ -195,9 +198,7 @@ def train_vision(config: Config) -> None:
     print_model_size(model)
 
     with Status("[bold blue]Preprocessing dataset...", console=console):
-        processed_dataset = preprocess_vision_dataset(
-            dataset, image_processor, config.data
-        )
+        processed_dataset = preprocess_vision_dataset(dataset, image_processor, config.data)
 
     train_dataset = processed_dataset[config.data.train_split]
     eval_dataset = None
@@ -207,9 +208,7 @@ def train_vision(config: Config) -> None:
     data_collator = get_vision_collator()
 
     # Use accuracy metric for vision classification
-    compute_metrics = (
-        compute_metrics_for_classification if eval_dataset is not None else None
-    )
+    compute_metrics = compute_metrics_for_classification if eval_dataset is not None else None
 
     trainer = create_trainer(
         model=model,
@@ -252,17 +251,13 @@ def main() -> None:
     # Model settings
     table.add_row("Model", config.model.model_name_or_path)
     table.add_row("Model type", config.model.model_type)
-    table.add_row(
-        "Flash Attention 2", "✓" if config.model.use_flash_attention_2 else "✗"
-    )
+    table.add_row("Flash Attention 2", "✓" if config.model.use_flash_attention_2 else "✗")
     if config.model.load_in_4bit or config.model.load_in_8bit:
         table.add_row("Quantization", "4-bit" if config.model.load_in_4bit else "8-bit")
     table.add_row("", "")  # Separator
 
     # Data settings
-    table.add_row(
-        "Dataset", config.data.dataset_name or config.data.train_file or "N/A"
-    )
+    table.add_row("Dataset", config.data.dataset_name or config.data.train_file or "N/A")
     if config.data.dataset_config_name:
         table.add_row("Dataset config", config.data.dataset_config_name)
     if config.model.model_type != "vision":
@@ -298,9 +293,7 @@ def main() -> None:
     table.add_row("Epochs", str(config.training.num_train_epochs))
     table.add_row("Batch size", str(config.training.per_device_train_batch_size))
     table.add_row("Learning rate", str(config.training.learning_rate))
-    table.add_row(
-        "Gradient checkpointing", "✓" if config.training.gradient_checkpointing else "✗"
-    )
+    table.add_row("Gradient checkpointing", "✓" if config.training.gradient_checkpointing else "✗")
     if config.model.model_type == "causal_lm":
         table.add_row("LLM trainer", config.training.llm_trainer)
     table.add_row("FSDP", config.training.fsdp or "disabled")
@@ -315,9 +308,7 @@ def main() -> None:
         if config.benchmark_eval.num_samples:
             table.add_row("Bench samples", str(config.benchmark_eval.num_samples))
 
-    console.print(
-        Panel(table, title="[bold blue]Configuration[/bold blue]", border_style="blue")
-    )
+    console.print(Panel(table, title="[bold blue]Configuration[/bold blue]", border_style="blue"))
 
     if config.model.model_type == "vision":
         train_vision(config)

@@ -35,7 +35,7 @@ except ImportError:
     SFTConfig = None
     SFTTrainer = None
 
-from .config import LoraConfig, ModelConfig, TrainingConfig
+from .config import DataConfig, LoraConfig, ModelConfig, TrainingConfig
 
 console = Console()
 
@@ -51,6 +51,15 @@ class RichProgressCallback(TrainerCallback):
         self.eval_task = None
         self.max_epochs = 1
         self.in_eval = False
+
+    @staticmethod
+    def _format_epoch(epoch) -> str:
+        if epoch is None:
+            return "?"
+        try:
+            return f"{float(epoch):.2f}"
+        except (TypeError, ValueError):
+            return str(epoch)
 
     def _print_gpu_memory(self):
         """Print GPU memory usage."""
@@ -111,7 +120,10 @@ class RichProgressCallback(TrainerCallback):
     def on_step_end(self, args, state, control, **kwargs):
         """Update progress bar on each step."""
         if self.progress and self.train_task is not None and not self.in_eval:
-            current_epoch = float(state.epoch or 0.0)
+            try:
+                current_epoch = float(state.epoch or 0.0)
+            except (TypeError, ValueError):
+                current_epoch = 0.0
             max_epochs = max(1, int(round(self.max_epochs)))
             epoch = min(max_epochs, max(1, int(math.ceil(current_epoch))))
             self.progress.update(
@@ -146,7 +158,7 @@ class RichProgressCallback(TrainerCallback):
         epoch = logs.get("epoch", state.epoch or 0)
         if parts and self.progress:
             self.progress.console.print(
-                f"  [bold]Train[/bold] @ epoch {epoch:.2f}: " + "  ".join(parts)
+                f"  [bold]Train[/bold] @ epoch {self._format_epoch(epoch)}: " + "  ".join(parts)
             )
 
     def on_prediction_step(self, args, state, control, eval_dataloader=None, **kwargs):
@@ -179,7 +191,7 @@ class RichProgressCallback(TrainerCallback):
         epoch = metrics.get("epoch", "?")
         if self.progress:
             self.progress.console.print(
-                f"  [bold]Eval[/bold] @ epoch {epoch:.2f}: " + "  ".join(parts)
+                f"  [bold]Eval[/bold] @ epoch {self._format_epoch(epoch)}: " + "  ".join(parts)
             )
 
     def on_evaluate_begin(self, args, state, control, **kwargs):
@@ -240,7 +252,7 @@ class RichProgressCallback(TrainerCallback):
                 table.add_row("Total FLOPs", f"{total_flos:.2e}")
 
         table.add_row("Total steps", str(state.global_step))
-        table.add_row("Epochs completed", f"{state.epoch:.2f}")
+        table.add_row("Epochs completed", self._format_epoch(state.epoch))
 
         console.print(
             Panel(
@@ -333,6 +345,8 @@ def get_training_arguments(
 def get_sft_training_arguments(
     config: TrainingConfig,
     model_config: ModelConfig,
+    data_config: Optional[DataConfig] = None,
+    skip_prepare_dataset: bool = True,
 ):
     if SFTConfig is None:
         raise ImportError(
@@ -341,17 +355,46 @@ def get_sft_training_arguments(
 
     training_args = SFTConfig(**_get_training_arguments_kwargs(config, model_config))
     dataset_kwargs = getattr(training_args, "dataset_kwargs", None) or {}
-    dataset_kwargs["skip_prepare_dataset"] = True
+    dataset_kwargs["skip_prepare_dataset"] = skip_prepare_dataset
     training_args.dataset_kwargs = dataset_kwargs
 
     if hasattr(training_args, "packing"):
         training_args.packing = False
     if hasattr(training_args, "eval_packing") and training_args.eval_packing is None:
         training_args.eval_packing = False
-    if hasattr(training_args, "dataset_text_field") and training_args.dataset_text_field is None:
+    if data_config is not None:
+        if hasattr(training_args, "dataset_text_field"):
+            training_args.dataset_text_field = data_config.text_column
+        if hasattr(training_args, "dataset_num_proc"):
+            training_args.dataset_num_proc = data_config.preprocessing_num_workers
+        if hasattr(training_args, "max_length"):
+            training_args.max_length = data_config.max_seq_length
+        if hasattr(training_args, "completion_only_loss"):
+            training_args.completion_only_loss = data_config.response_only_loss
+        if hasattr(training_args, "assistant_only_loss"):
+            training_args.assistant_only_loss = data_config.assistant_only_loss
+        if hasattr(training_args, "eos_token") and data_config.eos_token is not None:
+            training_args.eos_token = data_config.eos_token
+    elif hasattr(training_args, "dataset_text_field") and training_args.dataset_text_field is None:
         training_args.dataset_text_field = "text"
 
     return training_args
+
+
+def _dataset_is_pretokenized(dataset) -> bool:
+    try:
+        sample = next(iter(dataset))
+    except Exception:
+        return False
+    return isinstance(sample, dict) and "input_ids" in sample
+
+
+def _get_dataset_sample(dataset) -> Optional[Dict[str, Any]]:
+    try:
+        sample = next(iter(dataset))
+    except Exception:
+        return None
+    return sample if isinstance(sample, dict) else None
 
 
 def generate_run_id() -> str:
@@ -582,6 +625,7 @@ def create_trainer(
     training_config: TrainingConfig,
     model_config: ModelConfig,
     train_dataset,
+    data_config: Optional[DataConfig] = None,
     eval_dataset=None,
     processing_class=None,
     data_collator: Optional[DataCollator] = None,
@@ -615,13 +659,28 @@ def create_trainer(
         except TypeError:
             logger.info("Eval dataset size: unknown (streaming/iterable dataset)")
 
+    train_sample = _get_dataset_sample(train_dataset)
     use_trl_sft = training_config.llm_trainer == "trl" and model_config.model_type == "causal_lm"
     if use_trl_sft:
         if LoraSFTTrainer is None or SFTConfig is None:
             raise ImportError(
                 "TRL is required for causal LM finetuning. Install it with: pip install trl"
             )
-        training_args = get_sft_training_arguments(training_config, model_config)
+        training_args = get_sft_training_arguments(
+            training_config,
+            model_config,
+            data_config=data_config,
+            skip_prepare_dataset=bool(train_sample and "input_ids" in train_sample),
+        )
+        if (
+            data_config is not None
+            and train_sample is not None
+            and data_config.response_only_loss
+            and not data_config.assistant_only_loss
+            and hasattr(training_args, "assistant_only_loss")
+            and ("messages" in train_sample or "conversations" in train_sample)
+        ):
+            training_args.assistant_only_loss = True
         logger.info("Using TRL SFTTrainer for causal LM finetuning")
     else:
         training_args = get_training_arguments(training_config, model_config)

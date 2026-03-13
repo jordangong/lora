@@ -4,7 +4,7 @@ import logging
 from functools import partial
 from typing import Any, Dict, Optional
 
-from datasets import DatasetDict, load_dataset
+from datasets import Dataset, DatasetDict, load_dataset
 from transformers import (
     DataCollatorForLanguageModeling,
     DataCollatorForSeq2Seq,
@@ -152,6 +152,38 @@ def format_qa_with_source(
     return {output_column: f"{source_text}{answer}", source_column: source_text}
 
 
+def format_instruction_as_prompt_completion(
+    example: Dict[str, Any],
+    template: str = DEFAULT_PROMPT_TEMPLATE,
+    prompt_column: str = "prompt",
+    completion_column: str = "completion",
+) -> Dict[str, str]:
+    instruction = example.get("instruction", "")
+    input_text = example.get("input", "")
+    output = example.get("output", example.get("response", ""))
+    if "{output}" in template:
+        prompt_template, completion_suffix = template.split("{output}", 1)
+        prompt = prompt_template.format(instruction=instruction, input=input_text)
+        completion = f"{output}{completion_suffix}"
+    else:
+        prompt = template.format(instruction=instruction, input=input_text, output="")
+        completion = output
+    return {prompt_column: prompt, completion_column: completion}
+
+
+def format_qa_as_prompt_completion(
+    example: Dict[str, Any],
+    prompt_column: str = "prompt",
+    completion_column: str = "completion",
+) -> Dict[str, str]:
+    question = example.get("question", "")
+    answer = example.get("answer", "")
+    return {
+        prompt_column: f"Question: {question}\n\nAnswer: ",
+        completion_column: answer,
+    }
+
+
 def maybe_append_eos(text: str, tokenizer: PreTrainedTokenizer, append_eos_token: bool) -> str:
     eos_token = getattr(tokenizer, "eos_token", None)
     if not append_eos_token or not eos_token or text.endswith(eos_token):
@@ -203,6 +235,117 @@ def shuffle_dataset_split(split_data, seed: Optional[int]):
         return split_data
 
     return split_data.shuffle(seed=seed)
+
+
+def requires_trl_native_dataset(dataset: DatasetDict) -> bool:
+    for split_data in dataset.values():
+        columns = split_data.column_names
+        if "messages" in columns or "conversations" in columns:
+            return True
+        if "prompt" in columns and "completion" in columns:
+            return True
+    return False
+
+
+def normalize_conversations_to_messages(
+    example: Dict[str, Any],
+    source_column: str = "conversations",
+    output_column: str = "messages",
+) -> Dict[str, Any]:
+    conversations = example.get(source_column, [])
+    messages = []
+    for message in conversations:
+        if not isinstance(message, dict):
+            raise ValueError(
+                f"Expected conversation message to be a dict, got {type(message).__name__}"
+            )
+
+        role = message.get("role", message.get("from"))
+        content = message.get("content", message.get("value"))
+        if role is None or content is None:
+            raise ValueError(
+                "Conversation messages must include either role/content or from/value fields"
+            )
+
+        normalized_message = dict(message)
+        normalized_message["role"] = role
+        normalized_message["content"] = content
+        normalized_message.pop("from", None)
+        normalized_message.pop("value", None)
+        messages.append(normalized_message)
+
+    return {output_column: messages}
+
+
+def prepare_text_dataset_for_trl(
+    dataset: DatasetDict,
+    config: DataConfig,
+    shuffle_seed: Optional[int] = None,
+) -> DatasetDict:
+    template = config.prompt_template or DEFAULT_PROMPT_TEMPLATE
+    prepared_splits = {}
+
+    for split_name, split_data in dataset.items():
+        columns = split_data.column_names
+
+        if "messages" in columns or ("prompt" in columns and "completion" in columns):
+            prepared_splits[split_name] = split_data
+            continue
+
+        map_kwargs = {}
+        if isinstance(split_data, Dataset):
+            map_kwargs["num_proc"] = config.preprocessing_num_workers
+
+        if "conversations" in columns:
+            prepared_splits[split_name] = split_data.map(
+                normalize_conversations_to_messages,
+                remove_columns=["conversations"],
+                **map_kwargs,
+            )
+            continue
+
+        if config.text_column in columns:
+            prepared_splits[split_name] = split_data
+            continue
+
+        map_kwargs["remove_columns"] = columns
+
+        if "instruction" in columns:
+            prepared_splits[split_name] = split_data.map(
+                partial(format_instruction_as_prompt_completion, template=template),
+                **map_kwargs,
+            )
+            continue
+
+        if "question" in columns:
+            prepared_splits[split_name] = split_data.map(
+                format_qa_as_prompt_completion,
+                **map_kwargs,
+            )
+            continue
+
+        raise ValueError(
+            f"Could not find text column '{config.text_column}' in split '{split_name}'. "
+            "Provide data.text_column or use a dataset with instruction/question fields."
+        )
+
+    prepared_dataset = DatasetDict(prepared_splits)
+
+    if config.max_train_samples:
+        train_dataset = shuffle_dataset_split(prepared_dataset[config.train_split], shuffle_seed)
+        prepared_dataset[config.train_split] = train_dataset.select(
+            range(min(config.max_train_samples, len(train_dataset)))
+        )
+
+    if config.validation_split in prepared_dataset and config.max_eval_samples:
+        eval_dataset = shuffle_dataset_split(
+            prepared_dataset[config.validation_split], shuffle_seed
+        )
+        prepared_dataset[config.validation_split] = eval_dataset.select(
+            range(min(config.max_eval_samples, len(prepared_dataset[config.validation_split])))
+        )
+
+    return prepared_dataset
 
 
 def preprocess_text_dataset(

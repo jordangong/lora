@@ -13,7 +13,9 @@ from lora_finetune.data.text_data import (
     format_instruction,
     get_text_collator,
     load_text_dataset,
+    prepare_text_dataset_for_trl,
     preprocess_text_dataset,
+    requires_trl_native_dataset,
     tokenize_function,
 )
 from lora_finetune.data.vision_data import (
@@ -792,6 +794,151 @@ class TestPreprocessTextDataset:
         actual_ids = [row[0] for row in tokenized["train"]["input_ids"]]
 
         assert actual_ids == [0, 1, 2, 3, 4]
+
+
+class TestPrepareTextDatasetForTrl:
+    """Tests for TRL-native dataset preparation."""
+
+    def test_instruction_examples_become_prompt_completion_pairs(self):
+        dataset = DatasetDict(
+            {
+                "train": Dataset.from_dict(
+                    {
+                        "instruction": ["Translate"],
+                        "input": ["hello"],
+                        "output": ["bonjour"],
+                    }
+                )
+            }
+        )
+
+        prepared = prepare_text_dataset_for_trl(
+            dataset,
+            DataConfig(preprocessing_num_workers=1),
+        )
+
+        example = prepared["train"][0]
+        assert list(prepared["train"].column_names) == ["prompt", "completion"]
+        assert "Translate" in example["prompt"]
+        assert "hello" in example["prompt"]
+        assert example["completion"] == "bonjour"
+
+    def test_conversational_dataset_passes_through_for_trl(self):
+        dataset = DatasetDict(
+            {
+                "train": Dataset.from_dict(
+                    {
+                        "messages": [
+                            [
+                                {"role": "user", "content": "hi"},
+                                {"role": "assistant", "content": "hello"},
+                            ]
+                        ]
+                    }
+                )
+            }
+        )
+
+        prepared = prepare_text_dataset_for_trl(
+            dataset,
+            DataConfig(preprocessing_num_workers=1),
+        )
+
+        assert prepared["train"].column_names == ["messages"]
+        assert prepared["train"][0]["messages"][1]["content"] == "hello"
+
+    def test_conversations_dataset_is_normalized_to_messages_for_trl(self):
+        dataset = DatasetDict(
+            {
+                "train": Dataset.from_dict(
+                    {
+                        "conversations": [
+                            [
+                                {"role": "user", "content": "hi"},
+                                {"role": "assistant", "content": "hello"},
+                            ]
+                        ],
+                        "source": ["chatml"],
+                    }
+                )
+            }
+        )
+
+        prepared = prepare_text_dataset_for_trl(
+            dataset,
+            DataConfig(preprocessing_num_workers=1),
+        )
+
+        assert "conversations" not in prepared["train"].column_names
+        assert prepared["train"].column_names == ["source", "messages"]
+        assert prepared["train"][0]["messages"][0]["role"] == "user"
+        assert prepared["train"][0]["messages"][1]["content"] == "hello"
+
+    def test_conversations_from_value_dataset_is_normalized_to_messages_for_trl(self):
+        dataset = DatasetDict(
+            {
+                "train": Dataset.from_dict(
+                    {
+                        "conversations": [
+                            [
+                                {"from": "user", "value": "hi"},
+                                {"from": "assistant", "value": "hello"},
+                            ]
+                        ]
+                    }
+                )
+            }
+        )
+
+        prepared = prepare_text_dataset_for_trl(
+            dataset,
+            DataConfig(preprocessing_num_workers=1),
+        )
+
+        assert prepared["train"].column_names == ["messages"]
+        assert prepared["train"][0]["messages"][0] == {"role": "user", "content": "hi"}
+        assert prepared["train"][0]["messages"][1] == {"role": "assistant", "content": "hello"}
+
+
+class TestRequiresTrlNativeDataset:
+    """Tests for TRL-native dataset detection."""
+
+    def test_detects_conversational_dataset(self):
+        dataset = DatasetDict(
+            {
+                "train": Dataset.from_dict(
+                    {
+                        "messages": [
+                            [
+                                {"role": "user", "content": "hi"},
+                                {"role": "assistant", "content": "hello"},
+                            ]
+                        ]
+                    }
+                )
+            }
+        )
+
+        assert requires_trl_native_dataset(dataset) is True
+
+    def test_detects_prompt_completion_dataset(self):
+        dataset = DatasetDict(
+            {
+                "train": Dataset.from_dict(
+                    {
+                        "prompt": ["Question: hi\n\nAnswer: "],
+                        "completion": ["hello"],
+                    }
+                )
+            }
+        )
+
+        assert requires_trl_native_dataset(dataset) is True
+
+    def test_ignores_plain_text_dataset(self):
+        dataset = DatasetDict({"train": Dataset.from_dict({"text": ["hello"]})})
+
+        assert requires_trl_native_dataset(dataset) is False
 
 
 class TestPrepareDatasetForCausalLM:

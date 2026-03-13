@@ -10,7 +10,7 @@ import torch
 from torch import nn
 
 import lora_finetune.trainer as trainer_module
-from lora_finetune.config import LoraConfig, ModelConfig, TrainingConfig
+from lora_finetune.config import DataConfig, LoraConfig, ModelConfig, TrainingConfig
 from lora_finetune.trainer import (
     LoraTrainer,
     RichProgressCallback,
@@ -137,6 +137,60 @@ class TestGetTrainingArguments:
         assert training_args.packing is False
         assert training_args.eval_packing is False
         assert training_args.dataset_text_field == "text"
+
+    def test_get_sft_training_arguments_maps_data_config_fields(self, monkeypatch):
+        """Test that SFT args reuse compatible TRL-native data settings."""
+        training_config = TrainingConfig(
+            output_dir="./test-output",
+            eval_strategy="no",
+            load_best_model_at_end=False,
+            report_to="none",
+            llm_trainer="trl",
+        )
+        model_config = ModelConfig(model_type="causal_lm")
+        data_config = DataConfig(
+            text_column="body",
+            preprocessing_num_workers=8,
+            max_seq_length=4096,
+            response_only_loss=False,
+            assistant_only_loss=True,
+            eos_token="<eos>",
+        )
+
+        class FakeSFTConfig:
+            def __init__(self, **kwargs):
+                for key, value in kwargs.items():
+                    setattr(self, key, value)
+                self.dataset_kwargs = None
+                self.dataset_text_field = None
+                self.dataset_num_proc = None
+                self.max_length = None
+                self.completion_only_loss = None
+                self.assistant_only_loss = False
+                self.eos_token = None
+                self.packing = True
+                self.eval_packing = None
+
+        original_sft_config = trainer_module.SFTConfig
+        try:
+            monkeypatch.setattr(trainer_module, "SFTConfig", FakeSFTConfig)
+            training_args = get_sft_training_arguments(
+                training_config,
+                model_config,
+                data_config=data_config,
+                skip_prepare_dataset=False,
+            )
+        finally:
+            monkeypatch.setattr(trainer_module, "SFTConfig", original_sft_config)
+
+        assert isinstance(training_args, FakeSFTConfig)
+        assert training_args.dataset_kwargs == {"skip_prepare_dataset": False}
+        assert training_args.dataset_text_field == "body"
+        assert training_args.dataset_num_proc == 8
+        assert training_args.max_length == 4096
+        assert training_args.completion_only_loss is False
+        assert training_args.assistant_only_loss is True
+        assert training_args.eos_token == "<eos>"
 
     def test_training_config_save_settings(self):
         """Test training config with save settings."""
@@ -796,6 +850,43 @@ class TestRichProgressCallback:
         # Should not raise when progress is None
         callback._start_eval_progress(10)
         assert callback.eval_task is None
+
+    def test_format_epoch_handles_non_numeric_values(self):
+        """Test _format_epoch handles missing and string epochs safely."""
+        assert RichProgressCallback._format_epoch(None) == "?"
+        assert RichProgressCallback._format_epoch("?") == "?"
+        assert RichProgressCallback._format_epoch("1.5") == "1.50"
+
+    def test_on_evaluate_handles_string_epoch(self):
+        """Test on_evaluate does not fail when epoch is a string."""
+        callback = RichProgressCallback()
+        printed = []
+
+        class FakeConsole:
+            def print(self, message):
+                printed.append(message)
+
+        class FakeProgress:
+            def __init__(self):
+                self.console = FakeConsole()
+                self.removed_tasks = []
+
+            def remove_task(self, task_id):
+                self.removed_tasks.append(task_id)
+
+        callback.progress = FakeProgress()
+        callback.eval_task = 7
+
+        callback.on_evaluate(
+            args=None,
+            state=None,
+            control=None,
+            metrics={"epoch": "?", "eval_loss": 1.2345},
+        )
+
+        assert callback.eval_task is None
+        assert callback.progress.removed_tasks == [7]
+        assert printed == ["  [bold]Eval[/bold] @ epoch ?: [green]loss[/green]=1.2345"]
 
 
 class TestCreateTrainer:
