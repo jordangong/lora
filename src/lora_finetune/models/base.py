@@ -4,15 +4,16 @@ import logging
 from typing import Any, Optional, Tuple, Union
 
 import torch
-from peft import AdaLoraConfig, IA3Config
-from peft import LoraConfig as PeftLoraConfig
 from peft import (
+    AdaLoraConfig,
+    IA3Config,
     PeftModel,
     PrefixTuningConfig,
     TaskType,
     get_peft_model,
     prepare_model_for_kbit_training,
 )
+from peft import LoraConfig as PeftLoraConfig
 from transformers import (
     AutoImageProcessor,
     AutoModelForCausalLM,

@@ -69,7 +69,9 @@ class RichProgressCallback(TrainerCallback):
             if not torch.cuda.is_available():
                 return
 
-            table = Table(title="GPU Memory", show_header=True, header_style="bold cyan")
+            table = Table(
+                title="GPU Memory", show_header=True, header_style="bold cyan"
+            )
             table.add_column("GPU", style="dim")
             table.add_column("Allocated", justify="right")
             table.add_column("Reserved", justify="right")
@@ -96,7 +98,9 @@ class RichProgressCallback(TrainerCallback):
         """Initialize progress bar at training start."""
         # Show GPU memory now that model is on device
         self._print_gpu_memory()
-        console.print(Panel("[bold green]Training Started[/bold green]", border_style="green"))
+        console.print(
+            Panel("[bold green]Training Started[/bold green]", border_style="green")
+        )
 
         self.max_epochs = args.num_train_epochs
         self.progress = Progress(
@@ -158,7 +162,8 @@ class RichProgressCallback(TrainerCallback):
         epoch = logs.get("epoch", state.epoch or 0)
         if parts and self.progress:
             self.progress.console.print(
-                f"  [bold]Train[/bold] @ epoch {self._format_epoch(epoch)}: " + "  ".join(parts)
+                f"  [bold]Train[/bold] @ epoch {self._format_epoch(epoch)}: "
+                + "  ".join(parts)
             )
 
     def on_prediction_step(self, args, state, control, eval_dataloader=None, **kwargs):
@@ -191,7 +196,8 @@ class RichProgressCallback(TrainerCallback):
         epoch = metrics.get("epoch", state.epoch if state is not None else "?")
         if self.progress:
             self.progress.console.print(
-                f"  [bold]Eval[/bold] @ epoch {self._format_epoch(epoch)}: " + "  ".join(parts)
+                f"  [bold]Eval[/bold] @ epoch {self._format_epoch(epoch)}: "
+                + "  ".join(parts)
             )
 
     def on_evaluate_begin(self, args, state, control, **kwargs):
@@ -240,7 +246,9 @@ class RichProgressCallback(TrainerCallback):
             if train_runtime:
                 hours, remainder = divmod(int(train_runtime), 3600)
                 minutes, seconds = divmod(remainder, 60)
-                table.add_row("Training time", f"{hours:02d}:{minutes:02d}:{seconds:02d}")
+                table.add_row(
+                    "Training time", f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+                )
 
             if train_loss is not None:
                 table.add_row("Final loss", f"{train_loss:.4f}")
@@ -375,7 +383,10 @@ def get_sft_training_arguments(
             training_args.assistant_only_loss = data_config.assistant_only_loss
         if hasattr(training_args, "eos_token") and data_config.eos_token is not None:
             training_args.eos_token = data_config.eos_token
-    elif hasattr(training_args, "dataset_text_field") and training_args.dataset_text_field is None:
+    elif (
+        hasattr(training_args, "dataset_text_field")
+        and training_args.dataset_text_field is None
+    ):
         training_args.dataset_text_field = "text"
 
     return training_args
@@ -413,7 +424,9 @@ def setup_wandb(config: TrainingConfig) -> Optional[str]:
         logger.warning("wandb not installed. Install with: pip install wandb")
         return None
 
-    wandb_watch = str(config.wandb_watch).strip().lower() if config.wandb_watch else "false"
+    wandb_watch = (
+        str(config.wandb_watch).strip().lower() if config.wandb_watch else "false"
+    )
     os.environ["WANDB_WATCH"] = wandb_watch
     os.environ["WANDB_LOG_MODEL"] = "true" if config.wandb_log_model else "false"
 
@@ -440,7 +453,9 @@ class LoraTrainerMixin:
 
     def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
         """Compute loss with optional label smoothing."""
-        return super().compute_loss(model, inputs, return_outputs=return_outputs, **kwargs)
+        return super().compute_loss(
+            model, inputs, return_outputs=return_outputs, **kwargs
+        )
 
     def create_optimizer(self):
         """Create optimizer with LoRA+ support for different learning rates."""
@@ -494,7 +509,9 @@ class LoraTrainerMixin:
                 "params": [
                     p
                     for n, p in self.model.named_parameters()
-                    if p.requires_grad and "lora_B" not in n and n not in decay_parameters
+                    if p.requires_grad
+                    and "lora_B" not in n
+                    and n not in decay_parameters
                 ],
                 "weight_decay": 0.0,
                 "lr": base_lr,
@@ -506,7 +523,9 @@ class LoraTrainerMixin:
             group for group in optimizer_grouped_parameters if len(group["params"]) > 0
         ]
 
-        optimizer_cls, optimizer_kwargs = Trainer.get_optimizer_cls_and_kwargs(self.args)
+        optimizer_cls, optimizer_kwargs = Trainer.get_optimizer_cls_and_kwargs(
+            self.args
+        )
         # Remove lr from kwargs since we set it per group
         optimizer_kwargs.pop("lr", None)
 
@@ -543,7 +562,9 @@ class LoraTrainerMixin:
             metric_key_prefix=metric_key_prefix,
         )
 
-    def save_model(self, output_dir: Optional[str] = None, _internal_call: bool = False):
+    def save_model(
+        self, output_dir: Optional[str] = None, _internal_call: bool = False
+    ):
         """Save model, handling PEFT models correctly."""
         output_dir = output_dir if output_dir is not None else self.args.output_dir
         os.makedirs(output_dir, exist_ok=True)
@@ -660,7 +681,9 @@ def create_trainer(
             logger.info("Eval dataset size: unknown (streaming/iterable dataset)")
 
     train_sample = _get_dataset_sample(train_dataset)
-    use_trl_sft = training_config.llm_trainer == "trl" and model_config.model_type == "causal_lm"
+    use_trl_sft = (
+        training_config.llm_trainer == "trl" and model_config.model_type == "causal_lm"
+    )
     if use_trl_sft:
         if LoraSFTTrainer is None or SFTConfig is None:
             raise ImportError(
@@ -733,7 +756,9 @@ def enable_gradient_checkpointing(model: PreTrainedModel) -> PreTrainedModel:
     if hasattr(model, "gradient_checkpointing_enable"):
         # Disable use_cache as it's incompatible with gradient checkpointing
         model.config.use_cache = False
-        model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
+        model.gradient_checkpointing_enable(
+            gradient_checkpointing_kwargs={"use_reentrant": False}
+        )
         logger.info("Gradient checkpointing enabled")
     elif hasattr(model, "enable_input_require_grads"):
         model.enable_input_require_grads()

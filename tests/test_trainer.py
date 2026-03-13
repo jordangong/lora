@@ -345,6 +345,8 @@ class TestGetTrainingArgumentsFunction:
             output_dir="./test-output",
             num_train_epochs=3,
             learning_rate=2e-4,
+            bf16=False,
+            fp16=False,
         )
         model_config = ModelConfig()
 
@@ -359,6 +361,8 @@ class TestGetTrainingArgumentsFunction:
         training_config = TrainingConfig(
             output_dir="./test-output",
             fsdp="full_shard auto_wrap",
+            bf16=False,
+            fp16=False,
         )
         model_config = ModelConfig()
 
@@ -373,6 +377,8 @@ class TestGetTrainingArgumentsFunction:
         training_config = TrainingConfig(
             output_dir="./test-output",
             gradient_checkpointing=True,
+            bf16=False,
+            fp16=False,
         )
         model_config = ModelConfig()
 
@@ -387,6 +393,8 @@ class TestGetTrainingArgumentsFunction:
             output_dir="./test-output",
             gradient_checkpointing=True,
             gradient_checkpointing_kwargs={"use_reentrant": True},
+            bf16=False,
+            fp16=False,
         )
         model_config = ModelConfig()
 
@@ -400,6 +408,8 @@ class TestGetTrainingArgumentsFunction:
             output_dir="./test-output",
             report_to="wandb",
             wandb_run_name="test-run",
+            bf16=False,
+            fp16=False,
         )
         model_config = ModelConfig()
 
@@ -935,6 +945,8 @@ class TestCreateTrainer:
             load_best_model_at_end=False,
             report_to="none",
             llm_trainer="transformers",
+            bf16=False,
+            fp16=False,
         )
         model_config = ModelConfig()
 
@@ -968,6 +980,8 @@ class TestCreateTrainer:
             load_best_model_at_end=False,
             report_to="none",
             llm_trainer="transformers",
+            bf16=False,
+            fp16=False,
         )
         model_config = ModelConfig()
         lora_config = LoraConfig(method="lora", r=16)
@@ -1003,6 +1017,8 @@ class TestCreateTrainer:
             load_best_model_at_end=False,
             report_to="none",
             llm_trainer="transformers",
+            bf16=False,
+            fp16=False,
         )
         model_config = ModelConfig()
 
@@ -1038,6 +1054,8 @@ class TestCreateTrainer:
             load_best_model_at_end=False,
             report_to="none",
             llm_trainer="transformers",
+            bf16=False,
+            fp16=False,
         )
         model_config = ModelConfig()
 
@@ -1071,6 +1089,8 @@ class TestCreateTrainer:
             load_best_model_at_end=False,
             report_to="none",
             llm_trainer="transformers",
+            bf16=False,
+            fp16=False,
         )
         model_config = ModelConfig()
 
@@ -1104,6 +1124,8 @@ class TestCreateTrainer:
             load_best_model_at_end=False,
             report_to="none",
             llm_trainer="transformers",
+            bf16=False,
+            fp16=False,
         )
         model_config = ModelConfig(model_type="causal_lm")
 

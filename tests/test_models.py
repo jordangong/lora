@@ -3,7 +3,6 @@
 import pytest
 import torch
 from datasets import Dataset
-
 from lora_finetune.config import LoraConfig, ModelConfig
 from lora_finetune.models.base import (
     MODEL_TYPE_TO_AUTO_CLASS,
@@ -75,7 +74,9 @@ class TestGetQuantizationConfig:
         result = get_quantization_config(config)
         assert result is None
 
-    @pytest.mark.skipif(not _bitsandbytes_available(), reason="bitsandbytes not installed")
+    @pytest.mark.skipif(
+        not _bitsandbytes_available(), reason="bitsandbytes not installed"
+    )
     def test_4bit_quantization(self):
         """Test 4-bit quantization config."""
         config = ModelConfig(
@@ -91,7 +92,9 @@ class TestGetQuantizationConfig:
         assert result.bnb_4bit_quant_type == "nf4"
         assert result.bnb_4bit_use_double_quant is True
 
-    @pytest.mark.skipif(not _bitsandbytes_available(), reason="bitsandbytes not installed")
+    @pytest.mark.skipif(
+        not _bitsandbytes_available(), reason="bitsandbytes not installed"
+    )
     def test_8bit_quantization(self):
         """Test 8-bit quantization config."""
         config = ModelConfig(load_in_8bit=True)

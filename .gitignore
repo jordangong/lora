@@ -68,3 +68,6 @@ Thumbs.db
 
 # uv
 uv.lock
+
+# Unsloth
+unsloth_compiled_cache/

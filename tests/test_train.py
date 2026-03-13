@@ -1,10 +1,9 @@
 """Tests for training entrypoints."""
 
-from datasets import Dataset, DatasetDict
-from torch import nn
-
 import lora_finetune.train as train_module
+from datasets import Dataset, DatasetDict
 from lora_finetune.config import Config, DataConfig, ModelConfig, TrainingConfig
+from torch import nn
 
 
 class TestTrainLlm:
@@ -59,11 +58,15 @@ class TestTrainLlm:
         preprocess_calls = []
         create_trainer_calls = []
 
-        def fake_prepare_text_dataset_for_trl(raw_dataset, data_config, shuffle_seed=None):
+        def fake_prepare_text_dataset_for_trl(
+            raw_dataset, data_config, shuffle_seed=None
+        ):
             prepare_calls.append((raw_dataset, data_config, shuffle_seed))
             return raw_dataset
 
-        def fake_preprocess_text_dataset(raw_dataset, tokenizer, data_config, shuffle_seed=None):
+        def fake_preprocess_text_dataset(
+            raw_dataset, tokenizer, data_config, shuffle_seed=None
+        ):
             preprocess_calls.append((raw_dataset, tokenizer, data_config, shuffle_seed))
             return raw_dataset
 
@@ -76,13 +79,21 @@ class TestTrainLlm:
             "load_model_and_tokenizer",
             lambda model_config: (model, MockTokenizer()),
         )
-        monkeypatch.setattr(train_module, "get_llm_target_modules", lambda model_name: ["q_proj"])
-        monkeypatch.setattr(train_module, "get_peft_model_with_lora", lambda *args, **kwargs: model)
+        monkeypatch.setattr(
+            train_module, "get_llm_target_modules", lambda model_name: ["q_proj"]
+        )
+        monkeypatch.setattr(
+            train_module, "get_peft_model_with_lora", lambda *args, **kwargs: model
+        )
         monkeypatch.setattr(
             train_module, "prepare_model_for_training", lambda *args, **kwargs: model
         )
-        monkeypatch.setattr(train_module, "print_model_size", lambda *args, **kwargs: None)
-        monkeypatch.setattr(train_module, "load_text_dataset", lambda data_config: dataset)
+        monkeypatch.setattr(
+            train_module, "print_model_size", lambda *args, **kwargs: None
+        )
+        monkeypatch.setattr(
+            train_module, "load_text_dataset", lambda data_config: dataset
+        )
         monkeypatch.setattr(
             train_module,
             "prepare_text_dataset_for_trl",
