@@ -4,11 +4,10 @@ import os
 import sys
 from types import ModuleType
 
+import lora_finetune.trainer as trainer_module
 import numpy as np
 import pytest
 import torch
-from torch import nn
-
 from lora_finetune.config import LoraConfig, ModelConfig, TrainingConfig
 from lora_finetune.trainer import (
     LoraTrainer,
@@ -22,6 +21,7 @@ from lora_finetune.trainer import (
     prepare_model_for_training,
     setup_wandb,
 )
+from torch import nn
 
 # Disable wandb for tests
 os.environ["WANDB_DISABLED"] = "true"
@@ -478,7 +478,10 @@ class TestLoraTrainer:
                 return 10
 
             def __getitem__(self, idx):
-                return {"input_ids": torch.tensor([1, 2, 3]), "labels": torch.tensor([1, 2, 3])}
+                return {
+                    "input_ids": torch.tensor([1, 2, 3]),
+                    "labels": torch.tensor([1, 2, 3]),
+                }
 
         train_dataset = SimpleDataset()
 
@@ -771,6 +774,7 @@ class TestCreateTrainer:
             eval_strategy="no",
             load_best_model_at_end=False,
             report_to="none",
+            llm_trainer="transformers",
         )
         model_config = ModelConfig()
 
@@ -779,7 +783,10 @@ class TestCreateTrainer:
                 return 10
 
             def __getitem__(self, idx):
-                return {"input_ids": torch.tensor([1, 2, 3]), "labels": torch.tensor([1, 2, 3])}
+                return {
+                    "input_ids": torch.tensor([1, 2, 3]),
+                    "labels": torch.tensor([1, 2, 3]),
+                }
 
         train_dataset = SimpleDataset()
 
@@ -800,6 +807,7 @@ class TestCreateTrainer:
             eval_strategy="no",
             load_best_model_at_end=False,
             report_to="none",
+            llm_trainer="transformers",
         )
         model_config = ModelConfig()
         lora_config = LoraConfig(method="lora", r=16)
@@ -809,7 +817,10 @@ class TestCreateTrainer:
                 return 10
 
             def __getitem__(self, idx):
-                return {"input_ids": torch.tensor([1, 2, 3]), "labels": torch.tensor([1, 2, 3])}
+                return {
+                    "input_ids": torch.tensor([1, 2, 3]),
+                    "labels": torch.tensor([1, 2, 3]),
+                }
 
         train_dataset = SimpleDataset()
 
@@ -831,6 +842,7 @@ class TestCreateTrainer:
             eval_strategy="no",
             load_best_model_at_end=False,
             report_to="none",
+            llm_trainer="transformers",
         )
         model_config = ModelConfig()
 
@@ -839,7 +851,10 @@ class TestCreateTrainer:
                 return 10
 
             def __getitem__(self, idx):
-                return {"input_ids": torch.tensor([1, 2, 3]), "labels": torch.tensor([1, 2, 3])}
+                return {
+                    "input_ids": torch.tensor([1, 2, 3]),
+                    "labels": torch.tensor([1, 2, 3]),
+                }
 
         train_dataset = SimpleDataset()
 
@@ -851,7 +866,9 @@ class TestCreateTrainer:
         )
 
         # Check that RichProgressCallback is in the callbacks
-        callback_types = [type(cb).__name__ for cb in trainer.callback_handler.callbacks]
+        callback_types = [
+            type(cb).__name__ for cb in trainer.callback_handler.callbacks
+        ]
         assert "RichProgressCallback" in callback_types
 
     def test_create_trainer_disables_tqdm(self):
@@ -862,6 +879,7 @@ class TestCreateTrainer:
             eval_strategy="no",
             load_best_model_at_end=False,
             report_to="none",
+            llm_trainer="transformers",
         )
         model_config = ModelConfig()
 
@@ -870,7 +888,10 @@ class TestCreateTrainer:
                 return 10
 
             def __getitem__(self, idx):
-                return {"input_ids": torch.tensor([1, 2, 3]), "labels": torch.tensor([1, 2, 3])}
+                return {
+                    "input_ids": torch.tensor([1, 2, 3]),
+                    "labels": torch.tensor([1, 2, 3]),
+                }
 
         train_dataset = SimpleDataset()
 
@@ -891,6 +912,7 @@ class TestCreateTrainer:
             eval_strategy="steps",
             load_best_model_at_end=False,
             report_to="none",
+            llm_trainer="transformers",
         )
         model_config = ModelConfig()
 
@@ -899,7 +921,10 @@ class TestCreateTrainer:
                 return 10
 
             def __getitem__(self, idx):
-                return {"input_ids": torch.tensor([1, 2, 3]), "labels": torch.tensor([1, 2, 3])}
+                return {
+                    "input_ids": torch.tensor([1, 2, 3]),
+                    "labels": torch.tensor([1, 2, 3]),
+                }
 
         train_dataset = SimpleDataset()
 
@@ -910,6 +935,131 @@ class TestCreateTrainer:
                 model_config=model_config,
                 train_dataset=train_dataset,
                 eval_dataset=None,
+            )
+
+    def test_create_trainer_uses_transformers_backend_when_requested(self):
+        """Test that the transformers backend is used when explicitly requested."""
+        model = nn.Linear(10, 5)
+        training_config = TrainingConfig(
+            output_dir="./test-output",
+            eval_strategy="no",
+            load_best_model_at_end=False,
+            report_to="none",
+            llm_trainer="transformers",
+        )
+        model_config = ModelConfig(model_type="causal_lm")
+
+        class SimpleDataset(torch.utils.data.Dataset):
+            def __len__(self):
+                return 10
+
+            def __getitem__(self, idx):
+                return {
+                    "input_ids": torch.tensor([1, 2, 3]),
+                    "labels": torch.tensor([1, 2, 3]),
+                }
+
+        trainer = create_trainer(
+            model=model,
+            training_config=training_config,
+            model_config=model_config,
+            train_dataset=SimpleDataset(),
+        )
+
+        assert isinstance(trainer, LoraTrainer)
+
+    def test_create_trainer_uses_trl_backend_for_causal_lm(self, monkeypatch):
+        """Test that the TRL backend is selected for causal LM training."""
+        model = nn.Linear(10, 5)
+        processing_class = object()
+        training_config = TrainingConfig(
+            output_dir="./test-output",
+            eval_strategy="no",
+            load_best_model_at_end=False,
+            report_to="none",
+            llm_trainer="trl",
+        )
+        model_config = ModelConfig(model_type="causal_lm")
+
+        class SimpleDataset(torch.utils.data.Dataset):
+            def __len__(self):
+                return 10
+
+            def __getitem__(self, idx):
+                return {
+                    "input_ids": torch.tensor([1, 2, 3]),
+                    "labels": torch.tensor([1, 2, 3]),
+                }
+
+        class FakeSFTTrainer:
+            def __init__(self, *args, processing_class=None, **kwargs):
+                self.processing_class = processing_class
+                self.kwargs = kwargs
+
+        class FakeLoraSFTTrainer(FakeSFTTrainer):
+            def remove_callback(self, callback_cls):
+                return None
+
+        original_sft_trainer = trainer_module.SFTTrainer
+        original_lora_sft_trainer = trainer_module.LoraSFTTrainer
+        try:
+            monkeypatch.setattr(trainer_module, "SFTTrainer", FakeSFTTrainer)
+            monkeypatch.setattr(trainer_module, "LoraSFTTrainer", FakeLoraSFTTrainer)
+            trainer = create_trainer(
+                model=model,
+                training_config=training_config,
+                model_config=model_config,
+                train_dataset=SimpleDataset(),
+                processing_class=processing_class,
+            )
+        finally:
+            monkeypatch.setattr(trainer_module, "SFTTrainer", original_sft_trainer)
+            monkeypatch.setattr(
+                trainer_module, "LoraSFTTrainer", original_lora_sft_trainer
+            )
+
+        assert isinstance(trainer, FakeLoraSFTTrainer)
+        assert trainer.processing_class is processing_class
+
+    def test_create_trainer_raises_when_trl_requested_but_unavailable(
+        self, monkeypatch
+    ):
+        """Test that requesting the TRL backend fails clearly when TRL is unavailable."""
+        model = nn.Linear(10, 5)
+        training_config = TrainingConfig(
+            output_dir="./test-output",
+            eval_strategy="no",
+            load_best_model_at_end=False,
+            report_to="none",
+            llm_trainer="trl",
+        )
+        model_config = ModelConfig(model_type="causal_lm")
+
+        class SimpleDataset(torch.utils.data.Dataset):
+            def __len__(self):
+                return 10
+
+            def __getitem__(self, idx):
+                return {
+                    "input_ids": torch.tensor([1, 2, 3]),
+                    "labels": torch.tensor([1, 2, 3]),
+                }
+
+        original_lora_sft_trainer = trainer_module.LoraSFTTrainer
+        try:
+            monkeypatch.setattr(trainer_module, "LoraSFTTrainer", None)
+            with pytest.raises(
+                ImportError, match="TRL is required for causal LM finetuning"
+            ):
+                create_trainer(
+                    model=model,
+                    training_config=training_config,
+                    model_config=model_config,
+                    train_dataset=SimpleDataset(),
+                )
+        finally:
+            monkeypatch.setattr(
+                trainer_module, "LoraSFTTrainer", original_lora_sft_trainer
             )
 
 

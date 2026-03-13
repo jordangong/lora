@@ -63,6 +63,7 @@ training:
   bf16: true
   fp16: false
   gradient_checkpointing: true
+  llm_trainer: trl
   optim: adamw_torch_fused
   seed: 42
   dataloader_num_workers: 4

@@ -4,7 +4,6 @@ import os
 import tempfile
 
 import yaml
-
 from lora_finetune.config import (
     AugmentationConfig,
     BenchmarkEvalConfig,
@@ -318,6 +317,7 @@ class TestConfig:
         assert isinstance(config.lora, LoraConfig)
         assert isinstance(config.data, DataConfig)
         assert isinstance(config.training, TrainingConfig)
+        assert config.training.llm_trainer == "trl"
 
     def test_from_yaml(self):
         """Test loading configuration from YAML file."""
@@ -337,6 +337,7 @@ class TestConfig:
             "training": {
                 "output_dir": "./test-output",
                 "num_train_epochs": 1,
+                "llm_trainer": "transformers",
             },
         }
 
@@ -353,6 +354,7 @@ class TestConfig:
             assert config.data.max_seq_length == 1024
             assert config.training.output_dir == "./test-output"
             assert config.training.num_train_epochs == 1
+            assert config.training.llm_trainer == "transformers"
         finally:
             os.unlink(temp_path)
 

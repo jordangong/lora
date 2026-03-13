@@ -4,7 +4,6 @@ import argparse
 import tempfile
 
 import yaml
-
 from lora_finetune.cli import (
     _add_dataclass_args,
     _apply_args_to_config,
@@ -94,11 +93,21 @@ class TestAddDataclassArgs:
         _add_dataclass_args(parser, TrainingConfig)
 
         args = parser.parse_args(
-            ["--output_dir", "./test", "--num_train_epochs", "5", "--learning_rate", "1e-4"]
+            [
+                "--output_dir",
+                "./test",
+                "--num_train_epochs",
+                "5",
+                "--learning_rate",
+                "1e-4",
+                "--llm_trainer",
+                "transformers",
+            ]
         )
         assert args.output_dir == "./test"
         assert args.num_train_epochs == 5
         assert args.learning_rate == 1e-4
+        assert args.llm_trainer == "transformers"
 
     def test_boolean_args(self):
         """Test boolean arguments with --flag and --no_flag."""
@@ -297,17 +306,26 @@ class TestBuildConfig:
             "learning_rate",
             "gradient_checkpointing",
             "no_gradient_checkpointing",
+            "llm_trainer",
         ]:
             setattr(args, field, None)
 
         # Add minimal args for other configs
-        args.__dict__.update({k: None for k in vars(DataConfig()).keys() if not k.startswith("_")})
+        args.__dict__.update(
+            {k: None for k in vars(DataConfig()).keys() if not k.startswith("_")}
+        )
         args.__dict__.update(
             {k: None for k in vars(TrainingConfig()).keys() if not k.startswith("_")}
         )
-        args.__dict__.update({k: None for k in vars(ModelConfig()).keys() if not k.startswith("_")})
         args.__dict__.update(
-            {f"aug_{k}": None for k in vars(AugmentationConfig()).keys() if not k.startswith("_")}
+            {k: None for k in vars(ModelConfig()).keys() if not k.startswith("_")}
+        )
+        args.__dict__.update(
+            {
+                f"aug_{k}": None
+                for k in vars(AugmentationConfig()).keys()
+                if not k.startswith("_")
+            }
         )
         args.__dict__.update(
             {
@@ -317,13 +335,25 @@ class TestBuildConfig:
             }
         )
         args.__dict__.update(
-            {f"no_{k}": None for k in vars(TrainingConfig()).keys() if not k.startswith("_")}
+            {
+                f"no_{k}": None
+                for k in vars(TrainingConfig()).keys()
+                if not k.startswith("_")
+            }
         )
         args.__dict__.update(
-            {f"no_{k}": None for k in vars(ModelConfig()).keys() if not k.startswith("_")}
+            {
+                f"no_{k}": None
+                for k in vars(ModelConfig()).keys()
+                if not k.startswith("_")
+            }
         )
         args.__dict__.update(
-            {f"no_{k}": None for k in vars(DataConfig()).keys() if not k.startswith("_")}
+            {
+                f"no_{k}": None
+                for k in vars(DataConfig()).keys()
+                if not k.startswith("_")
+            }
         )
 
         config = build_config(args)
@@ -347,30 +377,54 @@ class TestBuildConfig:
 
         try:
             args = argparse.Namespace(config=temp_path)
-            # Add minimal required attrs
+            # Add all expected args as None
             args.__dict__.update(
-                {f"lora_{k}": None for k in vars(LoraConfig()).keys() if not k.startswith("_")}
+                {
+                    f"lora_{k}": None
+                    for k in vars(LoraConfig()).keys()
+                    if not k.startswith("_")
+                }
             )
             args.__dict__.update(
-                {f"no_lora_{k}": None for k in vars(LoraConfig()).keys() if not k.startswith("_")}
+                {
+                    f"no_lora_{k}": None
+                    for k in vars(LoraConfig()).keys()
+                    if not k.startswith("_")
+                }
             )
             args.__dict__.update(
                 {k: None for k in vars(ModelConfig()).keys() if not k.startswith("_")}
             )
             args.__dict__.update(
-                {f"no_{k}": None for k in vars(ModelConfig()).keys() if not k.startswith("_")}
+                {
+                    f"no_{k}": None
+                    for k in vars(ModelConfig()).keys()
+                    if not k.startswith("_")
+                }
             )
             args.__dict__.update(
                 {k: None for k in vars(DataConfig()).keys() if not k.startswith("_")}
             )
             args.__dict__.update(
-                {f"no_{k}": None for k in vars(DataConfig()).keys() if not k.startswith("_")}
+                {
+                    f"no_{k}": None
+                    for k in vars(DataConfig()).keys()
+                    if not k.startswith("_")
+                }
             )
             args.__dict__.update(
-                {k: None for k in vars(TrainingConfig()).keys() if not k.startswith("_")}
+                {
+                    k: None
+                    for k in vars(TrainingConfig()).keys()
+                    if not k.startswith("_")
+                }
             )
             args.__dict__.update(
-                {f"no_{k}": None for k in vars(TrainingConfig()).keys() if not k.startswith("_")}
+                {
+                    f"no_{k}": None
+                    for k in vars(TrainingConfig()).keys()
+                    if not k.startswith("_")
+                }
             )
             args.__dict__.update(
                 {
@@ -403,7 +457,7 @@ class TestBuildConfig:
             "model": {"model_name_or_path": "yaml-model"},
             "lora": {"r": 8},
             "data": {},
-            "training": {"output_dir": "./yaml-output"},
+            "training": {"output_dir": "./yaml-output", "llm_trainer": "trl"},
         }
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
@@ -411,7 +465,12 @@ class TestBuildConfig:
             temp_path = f.name
 
         try:
-            args = argparse.Namespace(config=temp_path, lora_r=32, model_name_or_path="cli-model")
+            args = argparse.Namespace(
+                config=temp_path,
+                lora_r=32,
+                model_name_or_path="cli-model",
+                llm_trainer="transformers",
+            )
             # Add other required attrs as None
             args.__dict__.update(
                 {
@@ -421,7 +480,11 @@ class TestBuildConfig:
                 }
             )
             args.__dict__.update(
-                {f"no_lora_{k}": None for k in vars(LoraConfig()).keys() if not k.startswith("_")}
+                {
+                    f"no_lora_{k}": None
+                    for k in vars(LoraConfig()).keys()
+                    if not k.startswith("_")
+                }
             )
             args.__dict__.update(
                 {
@@ -431,19 +494,35 @@ class TestBuildConfig:
                 }
             )
             args.__dict__.update(
-                {f"no_{k}": None for k in vars(ModelConfig()).keys() if not k.startswith("_")}
+                {
+                    f"no_{k}": None
+                    for k in vars(ModelConfig()).keys()
+                    if not k.startswith("_")
+                }
             )
             args.__dict__.update(
                 {k: None for k in vars(DataConfig()).keys() if not k.startswith("_")}
             )
             args.__dict__.update(
-                {f"no_{k}": None for k in vars(DataConfig()).keys() if not k.startswith("_")}
+                {
+                    f"no_{k}": None
+                    for k in vars(DataConfig()).keys()
+                    if not k.startswith("_")
+                }
             )
             args.__dict__.update(
-                {k: None for k in vars(TrainingConfig()).keys() if not k.startswith("_")}
+                {
+                    k: None
+                    for k in vars(TrainingConfig()).keys()
+                    if not k.startswith("_") and k != "llm_trainer"
+                }
             )
             args.__dict__.update(
-                {f"no_{k}": None for k in vars(TrainingConfig()).keys() if not k.startswith("_")}
+                {
+                    f"no_{k}": None
+                    for k in vars(TrainingConfig()).keys()
+                    if not k.startswith("_")
+                }
             )
             args.__dict__.update(
                 {
@@ -465,6 +544,7 @@ class TestBuildConfig:
             # CLI args should override YAML
             assert config.lora.r == 32
             assert config.model.model_name_or_path == "cli-model"
+            assert config.training.llm_trainer == "transformers"
         finally:
             import os
 

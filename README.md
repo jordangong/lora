@@ -5,6 +5,7 @@ A flexible framework for finetuning vision and language models using LoRA (Low-R
 ## Features
 
 - **Multi-model support**: ViT, Mistral, Llama3, and other HuggingFace models
+- **TRL-backed LLM finetuning**: causal language models use TRL `SFTTrainer` by default, with a fallback to the standard Transformers trainer
 - **Performance optimizations**:
   - Flash Attention 2
   - Gradient checkpointing
@@ -66,6 +67,8 @@ uv run python -m lora_finetune.train \
     --output_dir ./outputs/llama3-lora
 ```
 
+The shipped causal-LM configs set `training.llm_trainer: trl`, which uses TRL's `SFTTrainer` for supervised finetuning.
+
 ### Finetune ViT on image classification
 
 ```bash
@@ -91,27 +94,35 @@ uv run python -m lora_finetune.train \
 See `configs/` for example configurations. Key parameters:
 
 ```yaml
-# Model
-model_name_or_path: meta-llama/Meta-Llama-3-8B
-model_type: causal_lm  # causal_lm, seq2seq, vision
+model:
+  model_name_or_path: meta-llama/Meta-Llama-3-8B
+  model_type: causal_lm  # causal_lm, seq2seq, vision
 
-# LoRA
-lora_r: 16
-lora_alpha: 32
-lora_dropout: 0.05
-lora_target_modules: ["q_proj", "v_proj", "k_proj", "o_proj"]
+lora:
+  r: 16
+  alpha: 32
+  dropout: 0.05
+  target_modules: ["q_proj", "v_proj", "k_proj", "o_proj"]
 
-# Training
-learning_rate: 2e-4
-num_train_epochs: 3
-per_device_train_batch_size: 4
-gradient_accumulation_steps: 4
+training:
+  learning_rate: 2e-4
+  num_train_epochs: 3
+  per_device_train_batch_size: 4
+  gradient_accumulation_steps: 4
+  llm_trainer: trl  # trl or transformers; only used for causal_lm
+  gradient_checkpointing: true
+  bf16: true
+  fsdp: "full_shard auto_wrap"
+```
 
-# Performance
-use_flash_attention_2: true
-gradient_checkpointing: true
-bf16: true
-fsdp: "full_shard auto_wrap"
+For causal language models, `llm_trainer` defaults to `trl`. Set `training.llm_trainer: transformers` if you want to force the legacy Hugging Face `Trainer` path instead.
+
+You can also override it from the CLI:
+
+```bash
+uv run python -m lora_finetune.train \
+    --config configs/llama3_lora.yaml \
+    --llm_trainer transformers
 ```
 
 ## Multi-GPU Training with FSDP
