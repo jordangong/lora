@@ -2,7 +2,7 @@
 
 import logging
 from functools import partial
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from datasets import DatasetDict, load_dataset
 from transformers import DataCollatorForLanguageModeling, PreTrainedTokenizer
@@ -132,10 +132,19 @@ def tokenize_function(
     )
 
 
+def shuffle_dataset_split(split_data, seed: Optional[int]):
+    """Shuffle a dataset split deterministically when supported."""
+    if seed is None or not hasattr(split_data, "shuffle"):
+        return split_data
+
+    return split_data.shuffle(seed=seed)
+
+
 def preprocess_text_dataset(
     dataset: DatasetDict,
     tokenizer: PreTrainedTokenizer,
     config: DataConfig,
+    shuffle_seed: Optional[int] = None,
 ) -> DatasetDict:
     """Preprocess text dataset for training."""
     logger.info(f"Preprocessing dataset with max_seq_length={config.max_seq_length}")
@@ -197,14 +206,16 @@ def preprocess_text_dataset(
     tokenized_dataset = DatasetDict(tokenized_splits)
 
     if config.max_train_samples:
-        tokenized_dataset[config.train_split] = tokenized_dataset[config.train_split].select(
-            range(min(config.max_train_samples, len(tokenized_dataset[config.train_split])))
+        train_dataset = shuffle_dataset_split(tokenized_dataset[config.train_split], shuffle_seed)
+        tokenized_dataset[config.train_split] = train_dataset.select(
+            range(min(config.max_train_samples, len(train_dataset)))
         )
 
     if config.validation_split in tokenized_dataset and config.max_eval_samples:
-        tokenized_dataset[config.validation_split] = tokenized_dataset[
-            config.validation_split
-        ].select(
+        eval_dataset = shuffle_dataset_split(
+            tokenized_dataset[config.validation_split], shuffle_seed
+        )
+        tokenized_dataset[config.validation_split] = eval_dataset.select(
             range(min(config.max_eval_samples, len(tokenized_dataset[config.validation_split])))
         )
 

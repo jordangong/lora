@@ -541,6 +541,82 @@ class TestPreprocessTextDataset:
         assert len(tokenized["train"]) == 1
         assert "input_ids" in tokenized["train"].column_names
 
+    def test_max_train_samples_uses_shuffled_prefix_when_seeded(self):
+        """Test max_train_samples is applied after deterministic shuffling."""
+
+        class MockTokenizer:
+            def __call__(self, texts, truncation, max_length, padding, return_tensors):
+                ids = [int(text.split("-")[-1]) for text in texts]
+                return {
+                    "input_ids": [[value] for value in ids],
+                    "attention_mask": [[1] for _ in ids],
+                }
+
+        dataset = DatasetDict(
+            {
+                "train": Dataset.from_dict(
+                    {
+                        "text": [f"sample-{idx}" for idx in range(10)],
+                    }
+                )
+            }
+        )
+        config = DataConfig(text_column="text", preprocessing_num_workers=1, max_train_samples=4)
+
+        tokenized = preprocess_text_dataset(
+            dataset,
+            MockTokenizer(),
+            config,
+            shuffle_seed=123,
+        )
+
+        expected_order = dataset["train"].shuffle(seed=123).select(range(4))["text"]
+        expected_ids = [int(text.split("-")[-1]) for text in expected_order]
+        actual_ids = [row[0] for row in tokenized["train"]["input_ids"]]
+
+        assert actual_ids == expected_ids
+        assert actual_ids != [0, 1, 2, 3]
+
+    def test_train_split_not_shuffled_without_max_train_samples(self, monkeypatch):
+        """Test train split is left in original order when no truncation is requested."""
+
+        import lora_finetune.data.text_data as text_data
+
+        class MockTokenizer:
+            def __call__(self, texts, truncation, max_length, padding, return_tensors):
+                ids = [int(text.split("-")[-1]) for text in texts]
+                return {
+                    "input_ids": [[value] for value in ids],
+                    "attention_mask": [[1] for _ in ids],
+                }
+
+        def fail_if_called(split_data, seed):
+            raise AssertionError("shuffle_dataset_split should not be called")
+
+        monkeypatch.setattr(text_data, "shuffle_dataset_split", fail_if_called)
+
+        dataset = DatasetDict(
+            {
+                "train": Dataset.from_dict(
+                    {
+                        "text": [f"sample-{idx}" for idx in range(5)],
+                    }
+                )
+            }
+        )
+        config = DataConfig(text_column="text", preprocessing_num_workers=1)
+
+        tokenized = preprocess_text_dataset(
+            dataset,
+            MockTokenizer(),
+            config,
+            shuffle_seed=123,
+        )
+
+        actual_ids = [row[0] for row in tokenized["train"]["input_ids"]]
+
+        assert actual_ids == [0, 1, 2, 3, 4]
+
 
 class TestPrepareDatasetForCausalLM:
     """Tests for prepare_dataset_for_causal_lm function."""

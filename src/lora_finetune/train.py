@@ -83,7 +83,12 @@ def train_llm(config: Config) -> None:
 
     with Status("[bold blue]Loading dataset...", console=console):
         dataset = load_text_dataset(config.data)
-        tokenized_dataset = preprocess_text_dataset(dataset, tokenizer, config.data)
+        tokenized_dataset = preprocess_text_dataset(
+            dataset,
+            tokenizer,
+            config.data,
+            shuffle_seed=config.training.data_seed,
+        )
 
     train_dataset = tokenized_dataset[config.data.train_split]
     eval_dataset = None
@@ -107,7 +112,9 @@ def train_llm(config: Config) -> None:
             batch_size=config.benchmark_eval.batch_size,
         )
         callbacks.append(eval_callback)
-        logger.info(f"Benchmark eval ({config.benchmark_eval.tasks}) enabled every {config.benchmark_eval.eval_steps} steps")
+        logger.info(
+            f"Benchmark eval ({config.benchmark_eval.tasks}) enabled every {config.benchmark_eval.eval_steps} steps"
+        )
 
     trainer = create_trainer(
         model=model,
