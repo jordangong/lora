@@ -103,6 +103,61 @@ class TestTokenizeFunction:
         assert "input_ids" in result
         assert len(result["input_ids"]) == 2
 
+    def test_tokenize_response_only_loss_masks_prompt_tokens(self):
+        class MockTokenizer:
+            eos_token = None
+
+            def __call__(self, texts, truncation, max_length, padding, return_tensors):
+                return {
+                    "input_ids": [[idx + 1 for idx, _ in enumerate(text)] for text in texts],
+                    "attention_mask": [[1 for _ in text] for text in texts],
+                }
+
+        tokenizer = MockTokenizer()
+        examples = {"text": ["promptanswer"], "_source_text": ["prompt"]}
+
+        result = tokenize_function(
+            examples,
+            tokenizer,
+            max_length=512,
+            text_column="text",
+            source_text_column="_source_text",
+            response_only_loss=True,
+            append_eos_token=False,
+        )
+
+        assert result["labels"][0][:6] == [-100] * 6
+        assert result["labels"][0][6:] == result["input_ids"][0][6:]
+
+    def test_tokenize_appends_eos_when_enabled(self):
+        class MockTokenizer:
+            eos_token = "<eos>"
+
+            def __call__(self, texts, truncation, max_length, padding, return_tensors):
+                return {
+                    "input_ids": [[idx + 1 for idx, _ in enumerate(text)] for text in texts],
+                    "attention_mask": [[1 for _ in text] for text in texts],
+                }
+
+        tokenizer = MockTokenizer()
+
+        with_eos = tokenize_function(
+            {"text": ["answer"]},
+            tokenizer,
+            max_length=512,
+            append_eos_token=True,
+        )
+        without_eos = tokenize_function(
+            {"text": ["answer"]},
+            tokenizer,
+            max_length=512,
+            append_eos_token=False,
+        )
+
+        assert len(with_eos["input_ids"][0]) == len(without_eos["input_ids"][0]) + len(
+            tokenizer.eos_token
+        )
+
 
 class TestGetTextCollator:
     """Tests for get_text_collator function."""
@@ -112,12 +167,44 @@ class TestGetTextCollator:
 
         class MockTokenizer:
             pad_token_id = 0
+            padding_side = "right"
+
+            def pad(
+                self,
+                features,
+                padding=True,
+                max_length=None,
+                pad_to_multiple_of=None,
+                return_tensors=None,
+            ):
+                max_len = max(len(feature["input_ids"]) for feature in features)
+                if pad_to_multiple_of is not None and max_len % pad_to_multiple_of:
+                    max_len = (
+                        (max_len + pad_to_multiple_of - 1) // pad_to_multiple_of
+                    ) * pad_to_multiple_of
+                batch = {
+                    "input_ids": [],
+                    "attention_mask": [],
+                }
+                for feature in features:
+                    pad_len = max_len - len(feature["input_ids"])
+                    batch["input_ids"].append(feature["input_ids"] + [self.pad_token_id] * pad_len)
+                    batch["attention_mask"].append(feature["attention_mask"] + [0] * pad_len)
+                return batch
 
         tokenizer = MockTokenizer()
         collator = get_text_collator(tokenizer, mlm=False)
 
         assert collator is not None
-        assert collator.mlm is False
+        batch = collator(
+            [
+                {"input_ids": [1, 2], "attention_mask": [1, 1], "labels": [-100, 2]},
+                {"input_ids": [3], "attention_mask": [1], "labels": [3]},
+            ]
+        )
+
+        assert batch["labels"].tolist()[0][:2] == [-100, 2]
+        assert batch["labels"].tolist()[1][0] == 3
 
     def test_get_collator_mlm(self):
         """Test getting MLM collator."""
@@ -540,6 +627,95 @@ class TestPreprocessTextDataset:
         assert "train" in tokenized
         assert len(tokenized["train"]) == 1
         assert "input_ids" in tokenized["train"].column_names
+        assert "labels" in tokenized["train"].column_names
+
+    def test_instruction_examples_mask_prompt_tokens_by_default(self):
+        class MockTokenizer:
+            eos_token = None
+
+            def __call__(self, texts, truncation, max_length, padding, return_tensors):
+                return {
+                    "input_ids": [[idx + 1 for idx, _ in enumerate(text)] for text in texts],
+                    "attention_mask": [[1 for _ in text] for text in texts],
+                }
+
+        dataset = DatasetDict(
+            {
+                "train": Dataset.from_dict(
+                    {
+                        "instruction": ["Translate"],
+                        "input": ["hello"],
+                        "output": ["bonjour"],
+                    }
+                )
+            }
+        )
+        config = DataConfig(preprocessing_num_workers=1)
+
+        tokenized = preprocess_text_dataset(dataset, MockTokenizer(), config)
+        labels = tokenized["train"][0]["labels"]
+
+        assert labels.count(-100) > 0
+        assert any(label != -100 for label in labels)
+
+    def test_text_column_examples_use_full_sequence_loss(self):
+        class MockTokenizer:
+            eos_token = None
+
+            def __call__(self, texts, truncation, max_length, padding, return_tensors):
+                return {
+                    "input_ids": [[idx + 1 for idx, _ in enumerate(text)] for text in texts],
+                    "attention_mask": [[1 for _ in text] for text in texts],
+                }
+
+        dataset = DatasetDict(
+            {
+                "train": Dataset.from_dict(
+                    {
+                        "text": ["sample"],
+                    }
+                )
+            }
+        )
+        config = DataConfig(text_column="text", preprocessing_num_workers=1)
+
+        tokenized = preprocess_text_dataset(dataset, MockTokenizer(), config)
+
+        assert tokenized["train"][0]["labels"] == tokenized["train"][0]["input_ids"]
+
+    def test_append_eos_token_can_be_disabled(self):
+        class MockTokenizer:
+            eos_token = "<eos>"
+
+            def __call__(self, texts, truncation, max_length, padding, return_tensors):
+                return {
+                    "input_ids": [[idx + 1 for idx, _ in enumerate(text)] for text in texts],
+                    "attention_mask": [[1 for _ in text] for text in texts],
+                }
+
+        dataset = DatasetDict(
+            {
+                "train": Dataset.from_dict(
+                    {
+                        "text": ["sample"],
+                    }
+                )
+            }
+        )
+        with_eos = preprocess_text_dataset(
+            dataset,
+            MockTokenizer(),
+            DataConfig(text_column="text", preprocessing_num_workers=1, append_eos_token=True),
+        )
+        without_eos = preprocess_text_dataset(
+            dataset,
+            MockTokenizer(),
+            DataConfig(text_column="text", preprocessing_num_workers=1, append_eos_token=False),
+        )
+
+        assert (
+            len(with_eos["train"][0]["input_ids"]) == len(without_eos["train"][0]["input_ids"]) + 5
+        )
 
     def test_max_train_samples_uses_shuffled_prefix_when_seeded(self):
         """Test max_train_samples is applied after deterministic shuffling."""

@@ -282,6 +282,16 @@ class DataConfig:
     prompt_template: Optional[str] = field(
         default=None, metadata={"help": "Prompt template for text formatting"}
     )
+    response_only_loss: bool = field(
+        default=True,
+        metadata={
+            "help": "Mask prompt tokens so loss is computed only on responses when supported"
+        },
+    )
+    append_eos_token: bool = field(
+        default=True,
+        metadata={"help": "Append EOS token to each text example when the tokenizer provides one"},
+    )
     augmentation: AugmentationConfig = field(default_factory=AugmentationConfig)
 
 

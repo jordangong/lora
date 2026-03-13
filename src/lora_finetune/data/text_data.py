@@ -5,7 +5,11 @@ from functools import partial
 from typing import Any, Dict, Optional
 
 from datasets import DatasetDict, load_dataset
-from transformers import DataCollatorForLanguageModeling, PreTrainedTokenizer
+from transformers import (
+    DataCollatorForLanguageModeling,
+    DataCollatorForSeq2Seq,
+    PreTrainedTokenizer,
+)
 
 from ..config import DataConfig
 
@@ -26,6 +30,8 @@ CHAT_TEMPLATE = """<|begin_of_text|><|start_header_id|>user<|end_header_id|>
 {input}<|eot_id|><|start_header_id|>assistant<|end_header_id|>
 
 {output}<|eot_id|>"""
+
+SOURCE_TEXT_COLUMN = "_source_text"
 
 
 def load_text_dataset(config: DataConfig) -> DatasetDict:
@@ -116,20 +122,79 @@ def format_qa(example: Dict[str, Any], output_column: str = "text") -> Dict[str,
     return {output_column: f"Question: {question}\n\nAnswer: {answer}"}
 
 
+def format_instruction_with_source(
+    example: Dict[str, Any],
+    template: str = DEFAULT_PROMPT_TEMPLATE,
+    output_column: str = "text",
+    source_column: str = SOURCE_TEXT_COLUMN,
+) -> Dict[str, str]:
+    instruction = example.get("instruction", "")
+    input_text = example.get("input", "")
+    output = example.get("output", example.get("response", ""))
+    if "{output}" in template:
+        source_template, template_suffix = template.split("{output}", 1)
+        source_text = source_template.format(instruction=instruction, input=input_text)
+        text = f"{source_text}{output}{template_suffix}"
+    else:
+        source_text = template.format(instruction=instruction, input=input_text, output="")
+        text = f"{source_text}{output}"
+    return {output_column: text, source_column: source_text}
+
+
+def format_qa_with_source(
+    example: Dict[str, Any],
+    output_column: str = "text",
+    source_column: str = SOURCE_TEXT_COLUMN,
+) -> Dict[str, str]:
+    question = example.get("question", "")
+    answer = example.get("answer", "")
+    source_text = f"Question: {question}\n\nAnswer: "
+    return {output_column: f"{source_text}{answer}", source_column: source_text}
+
+
+def maybe_append_eos(text: str, tokenizer: PreTrainedTokenizer, append_eos_token: bool) -> str:
+    eos_token = getattr(tokenizer, "eos_token", None)
+    if not append_eos_token or not eos_token or text.endswith(eos_token):
+        return text
+    return f"{text}{eos_token}"
+
+
 def tokenize_function(
     examples: Dict[str, Any],
     tokenizer: PreTrainedTokenizer,
     max_length: int,
     text_column: str = "text",
+    source_text_column: Optional[str] = None,
+    response_only_loss: bool = False,
+    append_eos_token: bool = True,
 ) -> Dict[str, Any]:
     """Tokenize text examples."""
-    return tokenizer(
-        examples[text_column],
+    texts = [maybe_append_eos(text, tokenizer, append_eos_token) for text in examples[text_column]]
+    tokenized = tokenizer(
+        texts,
         truncation=True,
         max_length=max_length,
         padding=False,
         return_tensors=None,
     )
+    labels = [input_ids.copy() for input_ids in tokenized["input_ids"]]
+
+    if response_only_loss and source_text_column and source_text_column in examples:
+        source_tokenized = tokenizer(
+            examples[source_text_column],
+            truncation=True,
+            max_length=max_length,
+            padding=False,
+            return_tensors=None,
+        )
+        labels = [
+            [-100] * min(len(source_ids), len(input_ids))
+            + input_ids[min(len(source_ids), len(input_ids)) :].copy()
+            for input_ids, source_ids in zip(tokenized["input_ids"], source_tokenized["input_ids"])
+        ]
+
+    tokenized["labels"] = labels
+    return tokenized
 
 
 def shuffle_dataset_split(split_data, seed: Optional[int]):
@@ -150,43 +215,56 @@ def preprocess_text_dataset(
     logger.info(f"Preprocessing dataset with max_seq_length={config.max_seq_length}")
     template = config.prompt_template or DEFAULT_PROMPT_TEMPLATE
 
-    tokenize_fn = partial(
-        tokenize_function,
-        tokenizer=tokenizer,
-        max_length=config.max_seq_length,
-        text_column=config.text_column,
-    )
-
     # Process each split separately (they may have different columns for holdout eval)
     tokenized_splits = {}
     for split_name, split_data in dataset.items():
         columns = split_data.column_names
+        source_text_column = None
 
         # Apply formatting based on column structure (skip if text column exists)
         if config.text_column in columns:
             logger.info(f"Using existing '{config.text_column}' column for {split_name}")
         elif "instruction" in columns:
             logger.info(f"Using instruction template formatting for {split_name}")
-            split_data = split_data.map(
-                partial(
+            format_fn = partial(
+                format_instruction_with_source,
+                template=template,
+                output_column=config.text_column,
+                source_column=SOURCE_TEXT_COLUMN,
+            )
+            if not config.response_only_loss:
+                format_fn = partial(
                     format_instruction,
                     template=template,
                     output_column=config.text_column,
-                ),
+                )
+            split_data = split_data.map(
+                format_fn,
                 remove_columns=[col for col in columns if col not in [config.text_column]],
                 num_proc=config.preprocessing_num_workers,
                 desc=f"Formatting instructions ({split_name})",
             )
             columns = split_data.column_names
+            if config.response_only_loss:
+                source_text_column = SOURCE_TEXT_COLUMN
         elif "question" in columns:
             logger.info(f"Using question/answer formatting for {split_name}")
+            format_fn = partial(
+                format_qa_with_source,
+                output_column=config.text_column,
+                source_column=SOURCE_TEXT_COLUMN,
+            )
+            if not config.response_only_loss:
+                format_fn = partial(format_qa, output_column=config.text_column)
             split_data = split_data.map(
-                partial(format_qa, output_column=config.text_column),
+                format_fn,
                 remove_columns=[col for col in columns if col not in [config.text_column]],
                 num_proc=config.preprocessing_num_workers,
                 desc=f"Formatting Q&A ({split_name})",
             )
             columns = split_data.column_names
+            if config.response_only_loss:
+                source_text_column = SOURCE_TEXT_COLUMN
 
         if config.text_column not in columns:
             raise ValueError(
@@ -195,6 +273,15 @@ def preprocess_text_dataset(
             )
 
         # Tokenize
+        tokenize_fn = partial(
+            tokenize_function,
+            tokenizer=tokenizer,
+            max_length=config.max_seq_length,
+            text_column=config.text_column,
+            source_text_column=source_text_column,
+            response_only_loss=config.response_only_loss,
+            append_eos_token=config.append_eos_token,
+        )
         tokenized_splits[split_name] = split_data.map(
             tokenize_fn,
             batched=True,
@@ -225,8 +312,16 @@ def preprocess_text_dataset(
 def get_text_collator(
     tokenizer: PreTrainedTokenizer,
     mlm: bool = False,
-) -> DataCollatorForLanguageModeling:
+) -> DataCollatorForLanguageModeling | DataCollatorForSeq2Seq:
     """Get data collator for language modeling."""
+    if not mlm:
+        return DataCollatorForSeq2Seq(
+            tokenizer=tokenizer,
+            model=None,
+            label_pad_token_id=-100,
+            pad_to_multiple_of=8,
+        )
+
     return DataCollatorForLanguageModeling(
         tokenizer=tokenizer,
         mlm=mlm,

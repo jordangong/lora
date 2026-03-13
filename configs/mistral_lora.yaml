@@ -38,6 +38,8 @@ data:
   # eval_dataset_name: some_dataset
   # eval_dataset_config_name: main
   # eval_dataset_split: validation
+  response_only_loss: true
+  append_eos_token: true
 
 # Benchmark evaluation (generation-based, runs during training)
 benchmark_eval:
