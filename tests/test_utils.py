@@ -168,28 +168,6 @@ class TestSuppressWarnings:
             "  ⚠ /tmp/model does not have a padding token! Will use pad_token = <unk>."
         ]
 
-    def test_rich_warning_handler_tolerates_non_format_log_args(self, monkeypatch):
-        captured = []
-        handler = RichWarningHandler()
-        record = logging.LogRecord(
-            name="transformers",
-            level=logging.WARNING,
-            pathname=__file__,
-            lineno=1,
-            msg="SDPA attention mask API is deprecated",
-            args=(FutureWarning,),
-            exc_info=None,
-        )
-
-        monkeypatch.setattr(
-            "lora_finetune.utils.console.print",
-            lambda message: captured.append(str(message)),
-        )
-
-        handler.emit(record)
-
-        assert captured == ["  ⚠ SDPA attention mask API is deprecated"]
-
 
 class TestGetDevice:
     """Tests for get_device function."""

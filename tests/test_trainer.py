@@ -686,63 +686,6 @@ class TestLoraTrainer:
         assert hasattr(trainer, "compute_loss")
         assert callable(trainer.compute_loss)
 
-    def test_lora_trainer_mixin_falls_back_when_trl_logits_are_callable(self, monkeypatch):
-        """Test TRL loss fallback when wrapped logits metrics crash."""
-
-        class FakeSFTTrainer:
-            def __init__(self, *args, **kwargs):
-                self.calls = 0
-
-            def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
-                self.calls += 1
-                raise TypeError("'function' object is not subscriptable")
-
-        class FakeLoraSFTTrainer(trainer_module.LoraTrainerMixin, FakeSFTTrainer):
-            pass
-
-        fallback_calls = []
-        original_sft_trainer = trainer_module.SFTTrainer
-        original_trainer_compute_loss = trainer_module.Trainer.compute_loss
-        try:
-            monkeypatch.setattr(trainer_module, "SFTTrainer", FakeSFTTrainer)
-
-            def fake_trainer_compute_loss(self, model, inputs, return_outputs=False, **kwargs):
-                fallback_calls.append(
-                    {
-                        "inputs": dict(inputs),
-                        "return_outputs": return_outputs,
-                        "kwargs": kwargs,
-                    }
-                )
-                return ("loss", "outputs") if return_outputs else "loss"
-
-            monkeypatch.setattr(
-                trainer_module.Trainer,
-                "compute_loss",
-                fake_trainer_compute_loss,
-            )
-
-            trainer = FakeLoraSFTTrainer()
-            first = trainer.compute_loss(
-                object(), {"labels": torch.tensor([1])}, return_outputs=True
-            )
-            second = trainer.compute_loss(object(), {"labels": torch.tensor([2])})
-        finally:
-            monkeypatch.setattr(trainer_module, "SFTTrainer", original_sft_trainer)
-            monkeypatch.setattr(
-                trainer_module.Trainer,
-                "compute_loss",
-                original_trainer_compute_loss,
-            )
-
-        assert first == ("loss", "outputs")
-        assert second == "loss"
-        assert trainer._lora_finetune_skip_trl_logit_metrics is True
-        assert trainer.calls == 1
-        assert len(fallback_calls) == 2
-        assert fallback_calls[0]["inputs"]["use_cache"] is False
-        assert fallback_calls[1]["inputs"]["use_cache"] is False
-
     def test_lora_trainer_create_optimizer_method_exists(self):
         """Test that create_optimizer method exists."""
         from transformers import TrainingArguments

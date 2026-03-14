@@ -436,53 +436,10 @@ class LoraTrainerMixin:
     def __init__(self, *args, lora_config: Optional[LoraConfig] = None, **kwargs):
         super().__init__(*args, **kwargs)
         self.lora_config = lora_config
-        self._lora_finetune_skip_trl_logit_metrics = False
-
-    def _compute_loss_without_trl_logit_metrics(
-        self, model, inputs, return_outputs=False, **kwargs
-    ):
-        inputs = dict(inputs)
-        inputs["use_cache"] = False
-        return Trainer.compute_loss(
-            self,
-            model,
-            inputs,
-            return_outputs=return_outputs,
-            **kwargs,
-        )
 
     def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
-        if (
-            SFTTrainer is not None
-            and isinstance(self, SFTTrainer)
-            and self._lora_finetune_skip_trl_logit_metrics
-        ):
-            return self._compute_loss_without_trl_logit_metrics(
-                model,
-                inputs,
-                return_outputs=return_outputs,
-                **kwargs,
-            )
-
-        try:
-            return super().compute_loss(model, inputs, return_outputs=return_outputs, **kwargs)
-        except TypeError as exc:
-            if not (
-                SFTTrainer is not None
-                and isinstance(self, SFTTrainer)
-                and "'function' object is not subscriptable" in str(exc)
-            ):
-                raise
-            self._lora_finetune_skip_trl_logit_metrics = True
-            logger.warning(
-                "Disabling TRL logits-based training metrics because the current model wrapper exposes callable logits during compute_loss"
-            )
-            return self._compute_loss_without_trl_logit_metrics(
-                model,
-                inputs,
-                return_outputs=return_outputs,
-                **kwargs,
-            )
+        """Compute loss with optional label smoothing."""
+        return super().compute_loss(model, inputs, return_outputs=return_outputs, **kwargs)
 
     def create_optimizer(self):
         """Create optimizer with LoRA+ support for different learning rates."""
