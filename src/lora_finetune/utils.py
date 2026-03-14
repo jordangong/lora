@@ -140,6 +140,25 @@ def _print_warning_message(msg: str, rich_console: Optional[Console] = None) -> 
     target_console.print(Text(f"  ⚠ {msg}", style="dim yellow"))
 
 
+def _format_log_record_message(record: logging.LogRecord) -> str:
+    try:
+        return record.getMessage()
+    except TypeError:
+        message = str(record.msg)
+        if not record.args:
+            return message
+
+        extra_parts = []
+        for arg in record.args:
+            if isinstance(arg, type) and issubclass(arg, Warning):
+                continue
+            extra_parts.append(str(arg))
+
+        if extra_parts:
+            return " ".join([message, *extra_parts])
+        return message
+
+
 class RichWarningHandler(logging.Handler):
     """Custom logging handler that formats warnings elegantly with Rich."""
 
@@ -152,7 +171,7 @@ class RichWarningHandler(logging.Handler):
 
     def emit(self, record):
         msg = format_warning_message(
-            record.getMessage(),
+            _format_log_record_message(record),
             logger_name=record.name,
             extra_rules=self._extra_rules,
         )

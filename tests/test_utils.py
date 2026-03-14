@@ -137,6 +137,33 @@ class TestSuppressWarnings:
 
         assert normalized == "Some warning with extra spacing"
 
+    def test_rich_warning_handler_handles_warning_category_args(self):
+        """Ensure logging records with warning-category args do not crash formatting."""
+
+        class CaptureConsole:
+            def __init__(self):
+                self.messages = []
+
+            def print(self, message):
+                self.messages.append(message)
+
+        capture_console = CaptureConsole()
+        handler = RichWarningHandler(rich_console=capture_console)
+        record = logging.LogRecord(
+            name="transformers",
+            level=logging.WARNING,
+            pathname=__file__,
+            lineno=1,
+            msg="Deprecated attention mask path in use",
+            args=(FutureWarning,),
+            exc_info=None,
+        )
+
+        handler.emit(record)
+
+        assert len(capture_console.messages) == 1
+        assert capture_console.messages[0].plain == "  ⚠ Deprecated attention mask path in use"
+
 
 class TestGetDevice:
     """Tests for get_device function."""
