@@ -114,6 +114,36 @@ def _set_tokenizer_padding(tokenizer: Any) -> bool:
     return True
 
 
+def _set_unsloth_tokenizer_padding(tokenizer: Any) -> bool:
+    eos_token = getattr(tokenizer, "eos_token", None)
+    eos_token_id = getattr(tokenizer, "eos_token_id", None)
+    pad_token = getattr(tokenizer, "pad_token", None)
+    pad_token_id = getattr(tokenizer, "pad_token_id", None)
+
+    if (
+        pad_token is not None
+        and pad_token_id is not None
+        and pad_token != eos_token
+        and pad_token_id != eos_token_id
+    ):
+        return False
+
+    unk_token = getattr(tokenizer, "unk_token", None)
+    unk_token_id = getattr(tokenizer, "unk_token_id", None)
+    if (
+        unk_token is not None
+        and unk_token_id is not None
+        and unk_token != eos_token
+        and unk_token_id != eos_token_id
+    ):
+        tokenizer.pad_token = unk_token
+        tokenizer.pad_token_id = unk_token_id
+        logger.info("Set pad_token to unk_token for Unsloth")
+        return True
+
+    return _set_tokenizer_padding(tokenizer)
+
+
 def _is_local_model_path(model_name_or_path: str) -> bool:
     return Path(model_name_or_path).expanduser().exists()
 
@@ -136,7 +166,7 @@ def _create_unsloth_tokenizer_override(
         padding_side="right",
         model_max_length=max_seq_length,
     )
-    if not _set_tokenizer_padding(tokenizer):
+    if not _set_unsloth_tokenizer_padding(tokenizer):
         return None
 
     temp_dir = tempfile.TemporaryDirectory()
@@ -198,7 +228,7 @@ def _load_unsloth_model_and_tokenizer(
         if tokenizer_override_dir is not None:
             tokenizer_override_dir.cleanup()
 
-    _set_tokenizer_padding(tokenizer)
+    _set_unsloth_tokenizer_padding(tokenizer)
 
     model.config.pad_token_id = tokenizer.pad_token_id
     if hasattr(model, "generation_config") and model.generation_config is not None:

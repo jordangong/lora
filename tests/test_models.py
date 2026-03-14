@@ -207,10 +207,10 @@ class TestUnslothIntegration:
         assert captured["kwargs"]["tokenizer_name"] is not None
         assert captured["auto_tokenizer_args"]["model_name_or_path"] == "meta-llama/Meta-Llama-3-8B"
         assert captured["auto_tokenizer_args"]["model_max_length"] == 4096
-        assert tokenizer.pad_token == "</s>"
-        assert tokenizer.pad_token_id == 7
-        assert model.config.pad_token_id == 7
-        assert model.generation_config.pad_token_id == 7
+        assert tokenizer.pad_token == "<unk>"
+        assert tokenizer.pad_token_id == 1
+        assert model.config.pad_token_id == 1
+        assert model.generation_config.pad_token_id == 1
 
     def test_load_model_and_tokenizer_uses_local_override_for_unsloth_tokenizer(
         self, monkeypatch, tmp_path
@@ -309,10 +309,10 @@ class TestUnslothIntegration:
         assert captured["kwargs"]["tokenizer_name"] is None
         assert captured["kwargs"]["config_present"] is True
         assert captured["kwargs"]["weights_present"] is True
-        assert tokenizer.pad_token == "</s>"
-        assert tokenizer.pad_token_id == 7
-        assert model.config.pad_token_id == 7
-        assert model.generation_config.pad_token_id == 7
+        assert tokenizer.pad_token == "<unk>"
+        assert tokenizer.pad_token_id == 1
+        assert model.config.pad_token_id == 1
+        assert model.generation_config.pad_token_id == 1
 
 
 class TestLoadModelAndTokenizerSignature:
