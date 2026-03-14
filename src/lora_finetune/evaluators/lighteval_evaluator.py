@@ -7,7 +7,6 @@ import warnings
 from typing import Any, Dict, Optional
 
 import torch
-from rich.console import Console
 from transformers import PreTrainedModel
 from transformers.trainer_callback import TrainerCallback, TrainerControl, TrainerState
 from transformers.training_args import TrainingArguments
@@ -16,11 +15,11 @@ from ..utils import (
     RichWarningHandler,
     WarningRule,
     configure_warning_loggers,
+    console,
     restore_logger_configuration,
 )
 
 logger = logging.getLogger(__name__)
-console = Console()
 
 
 LIGHTEVAL_WARNING_RULES = (

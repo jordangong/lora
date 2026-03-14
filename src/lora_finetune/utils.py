@@ -6,7 +6,9 @@ import random
 import re
 import sys
 import warnings
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from dataclasses import dataclass
+from io import StringIO
 from typing import Optional, Sequence
 
 import numpy as np
@@ -62,6 +64,41 @@ WARNING_RULES = (
         logger_names=("accelerate",),
         replacement="Kernel version is below Accelerate's recommended minimum and may cause hangs",
     ),
+    WarningRule(
+        contains_any=("Unsloth should be imported before [transformers, peft]",),
+        suppress=True,
+    ),
+    WarningRule(
+        contains_any=("==((====))==  Unsloth - 2x faster free finetuning",),
+        suppress=True,
+    ),
+)
+
+CAPTURED_OUTPUT_RULES = (
+    WarningRule(
+        contains_any=("Will patch your computer to enable 2x faster free finetuning",),
+        suppress=True,
+    ),
+    WarningRule(contains_any=("patch everything to make training faster",), suppress=True),
+    WarningRule(
+        contains_any=("Fast downloading is enabled - ignore downloading bars",), suppress=True
+    ),
+    WarningRule(
+        contains_any=("Padding-free auto-enabled, enabling faster training",), suppress=True
+    ),
+    WarningRule(contains_any=("Padding-free enabled, enabling faster training",), suppress=True),
+    WarningRule(contains_any=("==((====))==  Unsloth",), suppress=True),
+    WarningRule(contains_any=("Free license: http://github.com/unslothai/unsloth",), suppress=True),
+    WarningRule(contains_any=("Num examples =",), suppress=True),
+    WarningRule(contains_any=("Gradient Accumulation steps =",), suppress=True),
+    WarningRule(contains_any=("Data Parallel GPUs =",), suppress=True),
+    WarningRule(contains_any=("Total batch size (",), suppress=True),
+    WarningRule(contains_any=("Trainable parameters =",), suppress=True),
+    WarningRule(contains_any=("Max memory:",), suppress=True),
+    WarningRule(contains_any=("Torch:",), suppress=True),
+    WarningRule(contains_any=("CUDA Toolkit:",), suppress=True),
+    WarningRule(contains_any=("Bfloat16 =",), suppress=True),
+    WarningRule(contains_any=("patched ", "QKV layers", "MLP layers"), suppress=True),
 )
 
 
@@ -162,6 +199,45 @@ class RichWarningHandler(logging.Handler):
         _print_warning_message(msg, self._console)
 
 
+def emit_captured_output(
+    captured_text: str,
+    *,
+    rich_console: Optional[Console] = None,
+    extra_rules: Sequence[WarningRule] = (),
+) -> None:
+    target_console = rich_console or console
+    for raw_line in captured_text.splitlines():
+        msg = format_warning_message(
+            raw_line,
+            extra_rules=(*extra_rules, *CAPTURED_OUTPUT_RULES),
+        )
+        if msg is None:
+            continue
+        _print_warning_message(msg, target_console)
+
+
+@contextmanager
+def capture_console_output(
+    *,
+    rich_console: Optional[Console] = None,
+    extra_rules: Sequence[WarningRule] = (),
+):
+    stdout_buffer = StringIO()
+    stderr_buffer = StringIO()
+    with redirect_stdout(stdout_buffer), redirect_stderr(stderr_buffer):
+        yield
+    emit_captured_output(
+        stdout_buffer.getvalue(),
+        rich_console=rich_console,
+        extra_rules=extra_rules,
+    )
+    emit_captured_output(
+        stderr_buffer.getvalue(),
+        rich_console=rich_console,
+        extra_rules=extra_rules,
+    )
+
+
 def configure_warning_loggers(
     logger_names: Sequence[str],
     handler: logging.Handler,
@@ -222,7 +298,16 @@ def suppress_warnings() -> None:
     # Replace transformers logger handlers with our Rich handler
     handler = RichWarningHandler()
     configure_warning_loggers(
-        ["transformers", "datasets", "accelerate", "huggingface_hub", "py.warnings"],
+        [
+            "transformers",
+            "datasets",
+            "accelerate",
+            "huggingface_hub",
+            "py.warnings",
+            "trl",
+            "unsloth",
+            "unsloth_zoo",
+        ],
         handler,
     )
 
