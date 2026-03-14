@@ -209,6 +209,8 @@ class TestUnslothIntegration:
         assert captured["auto_tokenizer_args"]["model_max_length"] == 4096
         assert tokenizer.pad_token == "<unk>"
         assert tokenizer.pad_token_id == 1
+        assert model.name_or_path == "meta-llama/Meta-Llama-3-8B"
+        assert model.config._name_or_path == "meta-llama/Meta-Llama-3-8B"
         assert model.config.pad_token_id == 1
         assert model.generation_config.pad_token_id == 1
 
@@ -311,6 +313,8 @@ class TestUnslothIntegration:
         assert captured["kwargs"]["weights_present"] is True
         assert tokenizer.pad_token == "<unk>"
         assert tokenizer.pad_token_id == 1
+        assert model.name_or_path == str(local_model_dir)
+        assert model.config._name_or_path == str(local_model_dir)
         assert model.config.pad_token_id == 1
         assert model.generation_config.pad_token_id == 1
 

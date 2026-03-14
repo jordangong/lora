@@ -230,6 +230,12 @@ def _load_unsloth_model_and_tokenizer(
 
     _set_unsloth_tokenizer_padding(tokenizer)
 
+    model.name_or_path = config.model_name_or_path
+    if getattr(model, "config", None) is not None:
+        model.config._name_or_path = config.model_name_or_path
+    if tokenizer is not None:
+        tokenizer.name_or_path = config.model_name_or_path
+
     model.config.pad_token_id = tokenizer.pad_token_id
     if hasattr(model, "generation_config") and model.generation_config is not None:
         model.generation_config.pad_token_id = tokenizer.pad_token_id
