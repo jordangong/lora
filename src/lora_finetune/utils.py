@@ -187,9 +187,16 @@ class RichWarningHandler(logging.Handler):
         self._console = rich_console or console
         self._extra_rules = tuple(extra_rules)
 
+    @staticmethod
+    def _safe_get_message(record: logging.LogRecord) -> str:
+        try:
+            return record.getMessage()
+        except TypeError:
+            return str(record.msg)
+
     def emit(self, record):
         msg = format_warning_message(
-            record.getMessage(),
+            self._safe_get_message(record),
             logger_name=record.name,
             extra_rules=self._extra_rules,
         )
