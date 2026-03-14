@@ -771,7 +771,11 @@ def prepare_model_for_training(
     tokenizer=None,
 ) -> PreTrainedModel:
     """Prepare model for training with optimizations."""
-    if training_config.gradient_checkpointing:
+    unsloth_managed_gradient_checkpointing = bool(
+        getattr(model, "_lora_finetune_unsloth_managed_gradient_checkpointing", False)
+    )
+
+    if training_config.gradient_checkpointing and not unsloth_managed_gradient_checkpointing:
         model = enable_gradient_checkpointing(model)
 
     # Sync model config with tokenizer to avoid mismatch warnings (after PEFT wrapping)

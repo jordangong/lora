@@ -71,7 +71,10 @@ def run_benchmark_eval(
 def train_llm(config: Config) -> None:
     """Train a language model with LoRA."""
     with Status("[bold blue]Loading model...", console=console):
-        model, tokenizer = load_model_and_tokenizer(config.model)
+        model, tokenizer = load_model_and_tokenizer(
+            config.model,
+            max_seq_length=config.data.max_seq_length,
+        )
 
         if config.lora.target_modules is None or config.lora.target_modules == [
             "q_proj",
@@ -89,6 +92,10 @@ def train_llm(config: Config) -> None:
             config.lora,
             model_type=config.model.model_type,
             is_quantized=is_quantized,
+            use_unsloth=config.model.use_unsloth,
+            use_gradient_checkpointing=config.training.gradient_checkpointing,
+            random_state=config.training.seed,
+            max_seq_length=config.data.max_seq_length,
         )
 
         model = prepare_model_for_training(model, config.training, tokenizer)
@@ -265,6 +272,8 @@ def main() -> None:
     # Model settings
     table.add_row("Model", config.model.model_name_or_path)
     table.add_row("Model type", config.model.model_type)
+    if config.model.model_type == "causal_lm":
+        table.add_row("Unsloth", "✓" if config.model.use_unsloth else "✗")
     table.add_row(
         "Flash Attention 2", "✓" if config.model.use_flash_attention_2 else "✗"
     )

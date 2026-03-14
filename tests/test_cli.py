@@ -82,10 +82,17 @@ class TestAddDataclassArgs:
         _add_dataclass_args(parser, ModelConfig)
 
         args = parser.parse_args(
-            ["--model_name_or_path", "test-model", "--model_type", "causal_lm"]
+            [
+                "--model_name_or_path",
+                "test-model",
+                "--model_type",
+                "causal_lm",
+                "--use_unsloth",
+            ]
         )
         assert args.model_name_or_path == "test-model"
         assert args.model_type == "causal_lm"
+        assert args.use_unsloth is True
 
     def test_add_training_config_args(self):
         """Test adding TrainingConfig arguments to parser."""

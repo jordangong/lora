@@ -147,6 +147,7 @@ class TestModelConfig:
         config = ModelConfig()
         assert config.model_name_or_path == "meta-llama/Meta-Llama-3-8B"
         assert config.model_type == "causal_lm"
+        assert config.use_unsloth is False
         assert config.torch_dtype == "auto"
         assert config.trust_remote_code is False
         assert config.use_flash_attention_2 is True
@@ -173,6 +174,11 @@ class TestModelConfig:
             model_type="vision",
         )
         assert config.model_type == "vision"
+
+    def test_unsloth_flag(self):
+        """Test Unsloth opt-in flag."""
+        config = ModelConfig(use_unsloth=True)
+        assert config.use_unsloth is True
 
 
 class TestAugmentationConfig:

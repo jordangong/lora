@@ -113,6 +113,10 @@ class ModelConfig:
         default="causal_lm",
         metadata={"help": "Model type: causal_lm, seq2seq, or vision"},
     )
+    use_unsloth: bool = field(
+        default=False,
+        metadata={"help": "Use Unsloth fast loading and LoRA patching for causal LM finetuning"},
+    )
     torch_dtype: Literal["auto", "float16", "bfloat16", "float32"] = field(
         default="auto",
         metadata={"help": "Torch dtype: auto, float16, bfloat16, or float32"},

@@ -45,8 +45,9 @@ dependencies = [
 [project.optional-dependencies]
 flash = ["flash-attn>=2.4.0"]
 bnb = ["bitsandbytes>=0.41.0"]
+unsloth = ["unsloth"]
 eval = ["lighteval>=0.13.0"]
-all = ["flash-attn>=2.4.0", "bitsandbytes>=0.41.0", "lighteval>=0.13.0"]
+all = ["flash-attn>=2.4.0", "bitsandbytes>=0.41.0", "unsloth", "lighteval>=0.13.0"]
 dev = ["pytest>=7.0.0", "black>=23.0.0", "ruff>=0.1.0"]
 
 [project.scripts]

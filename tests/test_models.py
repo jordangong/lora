@@ -3,6 +3,8 @@
 import pytest
 import torch
 from datasets import Dataset
+
+import lora_finetune.models.base as base_module
 from lora_finetune.config import LoraConfig, ModelConfig
 from lora_finetune.models.base import (
     MODEL_TYPE_TO_AUTO_CLASS,
@@ -11,8 +13,10 @@ from lora_finetune.models.base import (
     _create_lora_config,
     _create_prefix_tuning_config,
     _get_task_type,
+    get_peft_model_with_lora,
     get_quantization_config,
     get_torch_dtype,
+    load_model_and_tokenizer,
     prepare_model_for_full_finetuning,
 )
 from lora_finetune.models.llm import (
@@ -74,9 +78,7 @@ class TestGetQuantizationConfig:
         result = get_quantization_config(config)
         assert result is None
 
-    @pytest.mark.skipif(
-        not _bitsandbytes_available(), reason="bitsandbytes not installed"
-    )
+    @pytest.mark.skipif(not _bitsandbytes_available(), reason="bitsandbytes not installed")
     def test_4bit_quantization(self):
         """Test 4-bit quantization config."""
         config = ModelConfig(
@@ -92,9 +94,7 @@ class TestGetQuantizationConfig:
         assert result.bnb_4bit_quant_type == "nf4"
         assert result.bnb_4bit_use_double_quant is True
 
-    @pytest.mark.skipif(
-        not _bitsandbytes_available(), reason="bitsandbytes not installed"
-    )
+    @pytest.mark.skipif(not _bitsandbytes_available(), reason="bitsandbytes not installed")
     def test_8bit_quantization(self):
         """Test 8-bit quantization config."""
         config = ModelConfig(load_in_8bit=True)
@@ -102,6 +102,199 @@ class TestGetQuantizationConfig:
 
         assert result is not None
         assert result.load_in_8bit is True
+
+
+class TestUnslothIntegration:
+    """Tests for optional Unsloth integration."""
+
+    def test_load_model_and_tokenizer_raises_when_unsloth_missing(self, monkeypatch):
+        """Test that enabling Unsloth fails clearly when the package is unavailable."""
+        monkeypatch.setattr(base_module, "FastLanguageModel", None)
+
+        with pytest.raises(ImportError, match="Unsloth is not installed"):
+            load_model_and_tokenizer(
+                ModelConfig(model_type="causal_lm", use_unsloth=True),
+                max_seq_length=2048,
+            )
+
+    def test_load_model_and_tokenizer_uses_unsloth_when_enabled(self, monkeypatch):
+        """Test that the Unsloth loading path is used when requested."""
+        captured = {}
+
+        class FakeConfig:
+            pad_token_id = None
+
+        class FakeGenerationConfig:
+            pad_token_id = None
+
+        class FakeModel:
+            def __init__(self):
+                self.config = FakeConfig()
+                self.generation_config = FakeGenerationConfig()
+
+        class FakeTokenizer:
+            pad_token = None
+            pad_token_id = None
+            eos_token = "</s>"
+            eos_token_id = 7
+
+        class FakeFastLanguageModel:
+            @classmethod
+            def from_pretrained(
+                cls,
+                model_name,
+                max_seq_length=None,
+                dtype=None,
+                load_in_4bit=False,
+                load_in_8bit=False,
+                trust_remote_code=False,
+            ):
+                captured["kwargs"] = {
+                    "model_name": model_name,
+                    "max_seq_length": max_seq_length,
+                    "dtype": dtype,
+                    "load_in_4bit": load_in_4bit,
+                    "load_in_8bit": load_in_8bit,
+                    "trust_remote_code": trust_remote_code,
+                }
+                return FakeModel(), FakeTokenizer()
+
+        monkeypatch.setattr(base_module, "FastLanguageModel", FakeFastLanguageModel)
+
+        model, tokenizer = load_model_and_tokenizer(
+            ModelConfig(
+                model_type="causal_lm",
+                use_unsloth=True,
+                torch_dtype="bfloat16",
+                load_in_4bit=True,
+            ),
+            max_seq_length=4096,
+        )
+
+        assert captured["kwargs"]["model_name"] == "meta-llama/Meta-Llama-3-8B"
+        assert captured["kwargs"]["max_seq_length"] == 4096
+        assert captured["kwargs"]["dtype"] == torch.bfloat16
+        assert captured["kwargs"]["load_in_4bit"] is True
+        assert tokenizer.pad_token == "</s>"
+        assert tokenizer.pad_token_id == 7
+        assert model.config.pad_token_id == 7
+        assert model.generation_config.pad_token_id == 7
+
+
+class TestLoadModelAndTokenizerSignature:
+    """Regression tests for load_model_and_tokenizer call signature."""
+
+    def test_positional_num_labels_still_targets_vision_num_labels(self, monkeypatch):
+        """Test second positional argument still maps to num_labels for vision models."""
+        captured = {}
+
+        class FakeModel:
+            config = type("Config", (), {"pad_token_id": None})()
+
+        class FakeProcessor:
+            pass
+
+        class FakeAutoModel:
+            @classmethod
+            def from_pretrained(cls, model_name_or_path, **kwargs):
+                captured["model_name_or_path"] = model_name_or_path
+                captured["kwargs"] = kwargs
+                return FakeModel()
+
+        class FakeAutoImageProcessor:
+            @classmethod
+            def from_pretrained(cls, model_name_or_path, trust_remote_code=False):
+                captured["processor_args"] = {
+                    "model_name_or_path": model_name_or_path,
+                    "trust_remote_code": trust_remote_code,
+                }
+                return FakeProcessor()
+
+        monkeypatch.setitem(base_module.MODEL_TYPE_TO_AUTO_CLASS, "vision", FakeAutoModel)
+        monkeypatch.setattr(base_module, "AutoImageProcessor", FakeAutoImageProcessor)
+
+        model, processor = load_model_and_tokenizer(ModelConfig(model_type="vision"), 7)
+
+        assert isinstance(model, FakeModel)
+        assert isinstance(processor, FakeProcessor)
+        assert captured["kwargs"]["num_labels"] == 7
+        assert captured["kwargs"]["ignore_mismatched_sizes"] is True
+        assert captured["processor_args"]["model_name_or_path"] == "meta-llama/Meta-Llama-3-8B"
+
+    def test_get_peft_model_with_lora_uses_unsloth_when_enabled(self, monkeypatch):
+        """Test that Unsloth PEFT patching is used when requested."""
+        captured = {}
+
+        class FakeModel(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.linear = torch.nn.Linear(2, 2)
+
+        class FakeFastLanguageModel:
+            @staticmethod
+            def get_peft_model(
+                model,
+                r,
+                target_modules,
+                lora_alpha,
+                lora_dropout,
+                bias,
+                use_gradient_checkpointing,
+                random_state,
+                max_seq_length,
+                use_rslora=False,
+                use_dora=False,
+                modules_to_save=None,
+            ):
+                captured["kwargs"] = {
+                    "r": r,
+                    "target_modules": target_modules,
+                    "lora_alpha": lora_alpha,
+                    "lora_dropout": lora_dropout,
+                    "bias": bias,
+                    "use_gradient_checkpointing": use_gradient_checkpointing,
+                    "random_state": random_state,
+                    "max_seq_length": max_seq_length,
+                    "use_rslora": use_rslora,
+                    "use_dora": use_dora,
+                    "modules_to_save": modules_to_save,
+                }
+                return model
+
+        monkeypatch.setattr(base_module, "FastLanguageModel", FakeFastLanguageModel)
+
+        model = FakeModel()
+        lora_config = LoraConfig(method="dora", modules_to_save=["lm_head"])
+        result = get_peft_model_with_lora(
+            model,
+            lora_config,
+            model_type="causal_lm",
+            use_unsloth=True,
+            use_gradient_checkpointing=False,
+            random_state=123,
+            max_seq_length=8192,
+        )
+
+        assert result is model
+        assert captured["kwargs"]["r"] == lora_config.r
+        assert captured["kwargs"]["use_gradient_checkpointing"] is False
+        assert captured["kwargs"]["random_state"] == 123
+        assert captured["kwargs"]["max_seq_length"] == 8192
+        assert captured["kwargs"]["use_dora"] is True
+        assert captured["kwargs"]["modules_to_save"] == ["lm_head"]
+        assert getattr(result, "_lora_finetune_unsloth_managed_gradient_checkpointing") is False
+
+    def test_get_peft_model_with_lora_rejects_unsupported_unsloth_method(self, monkeypatch):
+        """Test unsupported Unsloth adapter methods fail clearly."""
+        monkeypatch.setattr(base_module, "FastLanguageModel", object())
+
+        with pytest.raises(ValueError, match="supports only lora, dora, loraplus, and full"):
+            get_peft_model_with_lora(
+                torch.nn.Linear(2, 2),
+                LoraConfig(method="adalora"),
+                model_type="causal_lm",
+                use_unsloth=True,
+            )
 
 
 class TestModelTypeMappings:
