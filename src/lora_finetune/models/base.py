@@ -3,20 +3,10 @@
 import inspect
 import logging
 import tempfile
+from pathlib import Path
 from typing import Any, Optional, Tuple, Union
 
 import torch
-
-try:
-    import unsloth
-except ImportError:
-    unsloth = None
-
-if unsloth is not None:
-    FastLanguageModel = unsloth.FastLanguageModel
-else:
-    FastLanguageModel = None
-
 from peft import (
     AdaLoraConfig,
     IA3Config,
@@ -37,6 +27,7 @@ from transformers import (
     PreTrainedModel,
 )
 
+from .._optional_unsloth import FastLanguageModel
 from ..config import LoraConfig, ModelConfig
 from ..utils import get_method_display_name
 
@@ -123,6 +114,18 @@ def _set_tokenizer_padding(tokenizer: Any) -> bool:
     return True
 
 
+def _is_local_model_path(model_name_or_path: str) -> bool:
+    return Path(model_name_or_path).expanduser().exists()
+
+
+def _populate_local_model_override_dir(source_dir: Path, target_dir: Path) -> None:
+    for item in source_dir.iterdir():
+        target = target_dir / item.name
+        if target.exists() or target.is_symlink():
+            continue
+        target.symlink_to(item.resolve(), target_is_directory=item.is_dir())
+
+
 def _create_unsloth_tokenizer_override(
     config: ModelConfig,
     max_seq_length: Optional[int] = None,
@@ -138,6 +141,11 @@ def _create_unsloth_tokenizer_override(
 
     temp_dir = tempfile.TemporaryDirectory()
     tokenizer.save_pretrained(temp_dir.name)
+    if _is_local_model_path(config.model_name_or_path):
+        _populate_local_model_override_dir(
+            Path(config.model_name_or_path).expanduser(),
+            Path(temp_dir.name),
+        )
     return temp_dir
 
 
@@ -171,7 +179,10 @@ def _load_unsloth_model_and_tokenizer(
         max_seq_length=max_seq_length,
     )
     if tokenizer_override_dir is not None:
-        load_kwargs["tokenizer_name"] = tokenizer_override_dir.name
+        if _is_local_model_path(config.model_name_or_path):
+            load_kwargs["model_name"] = tokenizer_override_dir.name
+        else:
+            load_kwargs["tokenizer_name"] = tokenizer_override_dir.name
 
     load_kwargs = {
         key: value for key, value in load_kwargs.items() if value is not None and value is not False

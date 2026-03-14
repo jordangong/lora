@@ -1,5 +1,7 @@
 """Tests for model utilities."""
 
+from pathlib import Path
+
 import pytest
 import torch
 from datasets import Dataset
@@ -205,6 +207,108 @@ class TestUnslothIntegration:
         assert captured["kwargs"]["tokenizer_name"] is not None
         assert captured["auto_tokenizer_args"]["model_name_or_path"] == "meta-llama/Meta-Llama-3-8B"
         assert captured["auto_tokenizer_args"]["model_max_length"] == 4096
+        assert tokenizer.pad_token == "</s>"
+        assert tokenizer.pad_token_id == 7
+        assert model.config.pad_token_id == 7
+        assert model.generation_config.pad_token_id == 7
+
+    def test_load_model_and_tokenizer_uses_local_override_for_unsloth_tokenizer(
+        self, monkeypatch, tmp_path
+    ):
+        """Test local model paths use a temporary override dir without tokenizer_name collisions."""
+        captured = {}
+        local_model_dir = tmp_path / "mistral-local"
+        local_model_dir.mkdir()
+        (local_model_dir / "config.json").write_text("{}")
+        (local_model_dir / "model.safetensors").write_text("weights")
+        (local_model_dir / "tokenizer.json").write_text("{}")
+        (local_model_dir / "tokenizer_config.json").write_text("{}")
+        (local_model_dir / "special_tokens_map.json").write_text("{}")
+
+        class FakeConfig:
+            pad_token_id = None
+
+        class FakeGenerationConfig:
+            pad_token_id = None
+
+        class FakeModel:
+            def __init__(self):
+                self.config = FakeConfig()
+                self.generation_config = FakeGenerationConfig()
+
+        class FakeTokenizer:
+            def __init__(self, pad_token=None, pad_token_id=None):
+                self.pad_token = pad_token
+                self.pad_token_id = pad_token_id
+                self.eos_token = "</s>"
+                self.eos_token_id = 7
+                self.unk_token = "<unk>"
+                self.unk_token_id = 1
+
+            def save_pretrained(self, path):
+                captured["saved_tokenizer_path"] = path
+
+        class FakeFastLanguageModel:
+            @classmethod
+            def from_pretrained(
+                cls,
+                model_name,
+                max_seq_length=None,
+                dtype=None,
+                load_in_4bit=False,
+                load_in_8bit=False,
+                trust_remote_code=False,
+                tokenizer_name=None,
+                **kwargs,
+            ):
+                override_path = Path(model_name)
+                captured["kwargs"] = {
+                    "model_name": model_name,
+                    "max_seq_length": max_seq_length,
+                    "dtype": dtype,
+                    "load_in_4bit": load_in_4bit,
+                    "load_in_8bit": load_in_8bit,
+                    "trust_remote_code": trust_remote_code,
+                    "tokenizer_name": tokenizer_name,
+                    "config_present": (override_path / "config.json").exists(),
+                    "weights_present": (override_path / "model.safetensors").exists(),
+                }
+                return FakeModel(), FakeTokenizer(pad_token="<unk>", pad_token_id=1)
+
+        class FakeAutoTokenizer:
+            @classmethod
+            def from_pretrained(
+                cls,
+                model_name_or_path,
+                trust_remote_code=False,
+                padding_side="right",
+                model_max_length=None,
+            ):
+                captured["auto_tokenizer_args"] = {
+                    "model_name_or_path": model_name_or_path,
+                    "trust_remote_code": trust_remote_code,
+                    "padding_side": padding_side,
+                    "model_max_length": model_max_length,
+                }
+                return FakeTokenizer()
+
+        monkeypatch.setattr(base_module, "FastLanguageModel", FakeFastLanguageModel)
+        monkeypatch.setattr(base_module, "AutoTokenizer", FakeAutoTokenizer)
+
+        model, tokenizer = load_model_and_tokenizer(
+            ModelConfig(
+                model_name_or_path=str(local_model_dir),
+                model_type="causal_lm",
+                use_unsloth=True,
+            ),
+            max_seq_length=2048,
+        )
+
+        assert captured["auto_tokenizer_args"]["model_name_or_path"] == str(local_model_dir)
+        assert captured["kwargs"]["model_name"] != str(local_model_dir)
+        assert captured["kwargs"]["tokenizer_name"] is None
+        assert captured["kwargs"]["config_present"] is True
+        assert captured["kwargs"]["weights_present"] is True
         assert tokenizer.pad_token == "</s>"
         assert tokenizer.pad_token_id == 7
         assert model.config.pad_token_id == 7
