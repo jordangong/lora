@@ -6,6 +6,7 @@ import pytest
 import torch
 from datasets import Dataset
 
+import lora_finetune._optional_unsloth as optional_unsloth_module
 import lora_finetune.models.base as base_module
 from lora_finetune.config import LoraConfig, ModelConfig
 from lora_finetune.models.base import (
@@ -317,6 +318,15 @@ class TestUnslothIntegration:
         assert model.config._name_or_path == str(local_model_dir)
         assert model.config.pad_token_id == 1
         assert model.generation_config.pad_token_id == 1
+
+
+class TestOptionalUnslothBootstrap:
+    def test_startup_verbose_requested_uses_environment_variable(self, monkeypatch):
+        monkeypatch.delenv("LORA_FINETUNE_VERBOSE_STARTUP", raising=False)
+        assert optional_unsloth_module._startup_verbose_requested() is False
+
+        monkeypatch.setenv("LORA_FINETUNE_VERBOSE_STARTUP", "1")
+        assert optional_unsloth_module._startup_verbose_requested() is True
 
 
 class TestLoadModelAndTokenizerSignature:

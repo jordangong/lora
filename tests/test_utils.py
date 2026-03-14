@@ -8,19 +8,24 @@ import numpy as np
 import pytest
 import torch
 
+import lora_finetune.utils as utils_module
+
 from lora_finetune.utils import (
     RichWarningHandler,
     _normalize_warning_message,
+    capture_runtime_output,
     check_bitsandbytes_available,
     check_flash_attention_available,
     count_parameters,
     ensure_dir,
     find_all_linear_names,
+    format_captured_output_message,
     get_device,
     get_gpu_memory_usage,
     get_model_size,
     set_seed,
     setup_logging,
+    verbose_logging_enabled,
     suppress_warnings,
 )
 
@@ -68,6 +73,24 @@ class TestSetupLogging:
         # Just verify the function accepts the level parameter without error
         logger = setup_logging(level="WARNING")
         assert logger is not None
+
+    def test_setup_logging_updates_verbose_state_with_existing_root_handlers(self, monkeypatch):
+        """Test verbose state follows the requested level even if logging is already configured."""
+        root_logger = logging.getLogger()
+        original_handlers = root_logger.handlers[:]
+        original_level = root_logger.level
+        original_verbose = utils_module._VERBOSE_LOGGING_ENABLED
+
+        try:
+            logging.basicConfig(level=logging.WARNING)
+            setup_logging(level="INFO")
+
+            assert root_logger.getEffectiveLevel() == logging.INFO
+            assert verbose_logging_enabled() is True
+        finally:
+            root_logger.handlers = original_handlers
+            root_logger.setLevel(original_level)
+            monkeypatch.setattr(utils_module, "_VERBOSE_LOGGING_ENABLED", original_verbose)
 
 
 class TestSuppressWarnings:
@@ -163,6 +186,72 @@ class TestSuppressWarnings:
 
         assert len(capture_console.messages) == 1
         assert capture_console.messages[0].plain == "  ⚠ Deprecated attention mask path in use"
+
+    def test_format_captured_output_suppresses_unsloth_banner(self):
+        """Ensure Unsloth startup banners are hidden in normal mode."""
+        assert (
+            format_captured_output_message(
+                "Unsloth: Will patch your computer to enable 2x faster free finetuning."
+            )
+            is None
+        )
+
+    def test_format_captured_output_compacts_sharded_warning(self):
+        """Ensure long sharding warnings are compacted to a single line preview."""
+        message = (
+            "The following layers were not sharded: model.layers.0.weight, model.layers.1.weight, "
+            "lm_head.weight, model.norm.weight, model.embed_tokens.weight"
+        )
+
+        assert format_captured_output_message(message) == (
+            "Some layers were not sharded: model.layers.0.weight, model.layers.1.weight, "
+            "lm_head.weight, model.norm.weight, ..."
+        )
+
+    def test_capture_runtime_output_rerenders_and_deduplicates_messages(self):
+        """Ensure captured third-party output is normalized and rendered once."""
+
+        class CaptureConsole:
+            def __init__(self):
+                self.messages = []
+
+            def print(self, message):
+                self.messages.append(message)
+
+        capture_console = CaptureConsole()
+
+        with capture_runtime_output(enabled=True, rich_console=capture_console):
+            print("Unsloth: Padding-free auto-enabled, enabling faster training.")
+            print(
+                "Unsloth: Dropout = 0 is supported for fast patching. You are using dropout = 0.05."
+            )
+            print(
+                "Unsloth: Dropout = 0 is supported for fast patching. You are using dropout = 0.05."
+            )
+
+        assert [message.plain for message in capture_console.messages] == [
+            "  ⚠ Unsloth fast patching is partially disabled because LoRA dropout is non-zero; expect lower performance. Set LoRA dropout to 0 for full fast patching."
+        ]
+
+    def test_capture_runtime_output_preserves_unmatched_output(self, capsys):
+        """Ensure unknown third-party output still reaches the original stream."""
+
+        class CaptureConsole:
+            def __init__(self):
+                self.messages = []
+
+            def print(self, message):
+                self.messages.append(message)
+
+        capture_console = CaptureConsole()
+
+        with capture_runtime_output(enabled=True, rich_console=capture_console):
+            print("Dependency emitted an unmatched diagnostic")
+
+        captured = capsys.readouterr()
+
+        assert "Dependency emitted an unmatched diagnostic" in captured.out
+        assert capture_console.messages == []
 
 
 class TestGetDevice:
