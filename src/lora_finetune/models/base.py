@@ -2,9 +2,21 @@
 
 import inspect
 import logging
+import tempfile
 from typing import Any, Optional, Tuple, Union
 
 import torch
+
+try:
+    import unsloth
+except ImportError:
+    unsloth = None
+
+if unsloth is not None:
+    FastLanguageModel = unsloth.FastLanguageModel
+else:
+    FastLanguageModel = None
+
 from peft import (
     AdaLoraConfig,
     IA3Config,
@@ -27,11 +39,6 @@ from transformers import (
 
 from ..config import LoraConfig, ModelConfig
 from ..utils import get_method_display_name
-
-try:
-    from unsloth import FastLanguageModel
-except ImportError:
-    FastLanguageModel = None
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +92,53 @@ def _filter_supported_kwargs(func: Any, kwargs: dict[str, Any]) -> dict[str, Any
         parameters = inspect.signature(func).parameters
     except (TypeError, ValueError):
         return kwargs
+    if any(parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in parameters.values()):
+        return kwargs
     return {key: value for key, value in kwargs.items() if key in parameters}
+
+
+def _set_tokenizer_padding(tokenizer: Any) -> bool:
+    eos_token = getattr(tokenizer, "eos_token", None)
+    eos_token_id = getattr(tokenizer, "eos_token_id", None)
+    if eos_token is None or eos_token_id is None:
+        return False
+
+    pad_token = getattr(tokenizer, "pad_token", None)
+    pad_token_id = getattr(tokenizer, "pad_token_id", None)
+    unk_token = getattr(tokenizer, "unk_token", None)
+    unk_token_id = getattr(tokenizer, "unk_token_id", None)
+
+    should_use_eos_padding = (
+        pad_token is None
+        or pad_token_id is None
+        or (unk_token is not None and pad_token == unk_token)
+        or (unk_token_id is not None and pad_token_id == unk_token_id)
+    )
+    if not should_use_eos_padding:
+        return False
+
+    tokenizer.pad_token = eos_token
+    tokenizer.pad_token_id = eos_token_id
+    logger.info("Set pad_token to eos_token")
+    return True
+
+
+def _create_unsloth_tokenizer_override(
+    config: ModelConfig,
+    max_seq_length: Optional[int] = None,
+) -> Optional[tempfile.TemporaryDirectory]:
+    tokenizer = AutoTokenizer.from_pretrained(
+        config.model_name_or_path,
+        trust_remote_code=config.trust_remote_code,
+        padding_side="right",
+        model_max_length=max_seq_length,
+    )
+    if not _set_tokenizer_padding(tokenizer):
+        return None
+
+    temp_dir = tempfile.TemporaryDirectory()
+    tokenizer.save_pretrained(temp_dir.name)
+    return temp_dir
 
 
 def _load_unsloth_model_and_tokenizer(
@@ -113,6 +166,13 @@ def _load_unsloth_model_and_tokenizer(
     if torch_dtype == "auto":
         load_kwargs["dtype"] = "auto"
 
+    tokenizer_override_dir = _create_unsloth_tokenizer_override(
+        config,
+        max_seq_length=max_seq_length,
+    )
+    if tokenizer_override_dir is not None:
+        load_kwargs["tokenizer_name"] = tokenizer_override_dir.name
+
     load_kwargs = {
         key: value for key, value in load_kwargs.items() if value is not None and value is not False
     } | {
@@ -121,12 +181,13 @@ def _load_unsloth_model_and_tokenizer(
     load_kwargs = _filter_supported_kwargs(FastLanguageModel.from_pretrained, load_kwargs)
 
     logger.info(f"Loading model from {config.model_name_or_path} with Unsloth")
-    model, tokenizer = FastLanguageModel.from_pretrained(**load_kwargs)
+    try:
+        model, tokenizer = FastLanguageModel.from_pretrained(**load_kwargs)
+    finally:
+        if tokenizer_override_dir is not None:
+            tokenizer_override_dir.cleanup()
 
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-        tokenizer.pad_token_id = tokenizer.eos_token_id
-        logger.info("Set pad_token to eos_token")
+    _set_tokenizer_padding(tokenizer)
 
     model.config.pad_token_id = tokenizer.pad_token_id
     if hasattr(model, "generation_config") and model.generation_config is not None:
@@ -242,10 +303,7 @@ def load_model_and_tokenizer(
             trust_remote_code=config.trust_remote_code,
             padding_side="right",
         )
-        if tokenizer.pad_token is None:
-            tokenizer.pad_token = tokenizer.eos_token
-            tokenizer.pad_token_id = tokenizer.eos_token_id
-            logger.info("Set pad_token to eos_token")
+        _set_tokenizer_padding(tokenizer)
 
         # Sync model config and generation config with tokenizer to avoid mismatch warnings
         model.config.pad_token_id = tokenizer.pad_token_id

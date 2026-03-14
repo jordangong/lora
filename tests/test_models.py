@@ -133,10 +133,16 @@ class TestUnslothIntegration:
                 self.generation_config = FakeGenerationConfig()
 
         class FakeTokenizer:
-            pad_token = None
-            pad_token_id = None
-            eos_token = "</s>"
-            eos_token_id = 7
+            def __init__(self, pad_token=None, pad_token_id=None):
+                self.pad_token = pad_token
+                self.pad_token_id = pad_token_id
+                self.eos_token = "</s>"
+                self.eos_token_id = 7
+                self.unk_token = "<unk>"
+                self.unk_token_id = 1
+
+            def save_pretrained(self, path):
+                captured["saved_tokenizer_path"] = path
 
         class FakeFastLanguageModel:
             @classmethod
@@ -148,6 +154,8 @@ class TestUnslothIntegration:
                 load_in_4bit=False,
                 load_in_8bit=False,
                 trust_remote_code=False,
+                tokenizer_name=None,
+                **kwargs,
             ):
                 captured["kwargs"] = {
                     "model_name": model_name,
@@ -156,10 +164,29 @@ class TestUnslothIntegration:
                     "load_in_4bit": load_in_4bit,
                     "load_in_8bit": load_in_8bit,
                     "trust_remote_code": trust_remote_code,
+                    "tokenizer_name": tokenizer_name,
                 }
-                return FakeModel(), FakeTokenizer()
+                return FakeModel(), FakeTokenizer(pad_token="<unk>", pad_token_id=1)
+
+        class FakeAutoTokenizer:
+            @classmethod
+            def from_pretrained(
+                cls,
+                model_name_or_path,
+                trust_remote_code=False,
+                padding_side="right",
+                model_max_length=None,
+            ):
+                captured["auto_tokenizer_args"] = {
+                    "model_name_or_path": model_name_or_path,
+                    "trust_remote_code": trust_remote_code,
+                    "padding_side": padding_side,
+                    "model_max_length": model_max_length,
+                }
+                return FakeTokenizer()
 
         monkeypatch.setattr(base_module, "FastLanguageModel", FakeFastLanguageModel)
+        monkeypatch.setattr(base_module, "AutoTokenizer", FakeAutoTokenizer)
 
         model, tokenizer = load_model_and_tokenizer(
             ModelConfig(
@@ -175,6 +202,9 @@ class TestUnslothIntegration:
         assert captured["kwargs"]["max_seq_length"] == 4096
         assert captured["kwargs"]["dtype"] == torch.bfloat16
         assert captured["kwargs"]["load_in_4bit"] is True
+        assert captured["kwargs"]["tokenizer_name"] is not None
+        assert captured["auto_tokenizer_args"]["model_name_or_path"] == "meta-llama/Meta-Llama-3-8B"
+        assert captured["auto_tokenizer_args"]["model_max_length"] == 4096
         assert tokenizer.pad_token == "</s>"
         assert tokenizer.pad_token_id == 7
         assert model.config.pad_token_id == 7
