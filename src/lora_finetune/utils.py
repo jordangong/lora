@@ -6,9 +6,8 @@ import random
 import re
 import sys
 import warnings
-from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Callable, Literal, Optional, Sequence
+from typing import Optional, Sequence
 
 import numpy as np
 import torch
@@ -18,7 +17,6 @@ from rich.table import Table
 from rich.text import Text
 
 console = Console()
-_VERBOSE_LOGGING_ENABLED = False
 
 ANSI_ESCAPE_RE = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
 ORPHAN_SGR_RE = re.compile(r"\[(?:\d{1,3}(?:;\d{1,3})*)m")
@@ -65,61 +63,6 @@ WARNING_RULES = (
         replacement="Kernel version is below Accelerate's recommended minimum and may cause hangs",
     ),
 )
-
-CAPTURED_OUTPUT_RULES = (
-    WarningRule(
-        contains_any=("Unsloth: Will patch your computer to enable 2x faster free finetuning.",),
-        suppress=True,
-    ),
-    WarningRule(
-        contains_any=("Unsloth Zoo will now patch everything to make training faster!",),
-        suppress=True,
-    ),
-    WarningRule(
-        contains_any=(
-            "Unsloth: Fast downloading is enabled - ignore downloading bars which are red colored!",
-        ),
-        suppress=True,
-    ),
-    WarningRule(
-        contains_any=("Unsloth: Padding-free auto-enabled, enabling faster training.",),
-        suppress=True,
-    ),
-    WarningRule(
-        contains_all=("==((====))==", "Unsloth", "Transformers:"),
-        suppress=True,
-    ),
-    WarningRule(
-        contains_any=(
-            "Num GPUs =",
-            "CUDA Toolkit:",
-            "Bfloat16 =",
-            "Free license: http://github.com/unslothai/unsloth",
-        ),
-        suppress=True,
-    ),
-    WarningRule(
-        contains_any=("Unsloth - 2x faster free finetuning |",),
-        suppress=True,
-    ),
-    WarningRule(
-        contains_all=("Unsloth", "patched", "QKV layers"),
-        suppress=True,
-    ),
-    WarningRule(
-        contains_all=("Unsloth: Will load", "as a legacy tokenizer"),
-        replacement="Unsloth is using the legacy tokenizer path",
-    ),
-    WarningRule(
-        contains_any=("Dropout = 0 is supported for fast patching",),
-        replacement=(
-            "Unsloth fast patching is partially disabled because LoRA dropout is non-zero; "
-            "expect lower performance. Set LoRA dropout to 0 for full fast patching."
-        ),
-    ),
-)
-
-CapturedOutputAction = Literal["render", "suppress", "passthrough"]
 
 
 def get_method_display_name(method: str) -> str:
@@ -189,130 +132,12 @@ def format_warning_message(
     return formatted
 
 
-def format_captured_output_message(msg: str) -> Optional[str]:
-    """Normalize and classify captured third-party stdout/stderr for normal mode."""
-    action, formatted = _classify_captured_output_message(msg)
-    if action != "render":
-        return None
-    return formatted
-
-
-def _classify_captured_output_message(msg: str) -> tuple[CapturedOutputAction, Optional[str]]:
-    """Classify captured stdout/stderr for rendering, suppression, or passthrough."""
-    formatted = _normalize_warning_message(msg)
-    if not formatted:
-        return "suppress", None
-
-    if formatted.startswith("The following layers were not sharded:"):
-        raw_layers = formatted.split(":", 1)[1]
-        layers = [layer.strip() for layer in raw_layers.split(",") if layer.strip()]
-        preview = ", ".join(layers[:4])
-        if len(layers) > 4:
-            preview += ", ..."
-        return "render", f"Some layers were not sharded: {preview}"
-
-    for rule in CAPTURED_OUTPUT_RULES:
-        if not _warning_rule_matches(formatted, "", rule):
-            continue
-        if rule.suppress:
-            return "suppress", None
-        if rule.replacement is not None:
-            return "render", rule.replacement
-        return "render", formatted
-
-    return "passthrough", None
-
-
 def _print_warning_message(msg: str, rich_console: Optional[Console] = None) -> None:
     """Render warning message with Rich without interpreting message markup."""
     if not msg:
         return
     target_console = rich_console or console
     target_console.print(Text(f"  ⚠ {msg}", style="dim yellow"))
-
-
-def verbose_logging_enabled() -> bool:
-    """Return whether runtime logging is configured for verbose output."""
-    return _VERBOSE_LOGGING_ENABLED
-
-
-class _RuntimeOutputCapture:
-    """Line-buffered stdout/stderr capture that re-renders actionable messages via Rich."""
-
-    def __init__(self, emitter: Callable[[str, bool], None], fallback_stream):
-        self._emitter = emitter
-        self._fallback_stream = fallback_stream
-        self._buffer = ""
-        self.encoding = getattr(fallback_stream, "encoding", "utf-8")
-
-    def write(self, data: str) -> int:
-        if not data:
-            return 0
-        self._buffer += data.replace("\r\n", "\n").replace("\r", "\n")
-        while "\n" in self._buffer:
-            line, self._buffer = self._buffer.split("\n", 1)
-            self._emitter(line, True)
-        return len(data)
-
-    def flush(self) -> None:
-        if self._buffer:
-            self._emitter(self._buffer, False)
-            self._buffer = ""
-        if hasattr(self._fallback_stream, "flush"):
-            self._fallback_stream.flush()
-
-    def isatty(self) -> bool:
-        return False
-
-    def writable(self) -> bool:
-        return True
-
-
-@contextmanager
-def capture_runtime_output(
-    *,
-    enabled: bool = True,
-    rich_console: Optional[Console] = None,
-):
-    """Capture raw third-party stdout/stderr and re-render actionable messages cleanly."""
-    if not enabled:
-        yield
-        return
-
-    target_console = rich_console or console
-    seen_messages: set[str] = set()
-
-    def _emit(line: str, terminated: bool, fallback_stream) -> None:
-        action, message = _classify_captured_output_message(line)
-        if action == "passthrough":
-            fallback_stream.write(line)
-            if terminated:
-                fallback_stream.write("\n")
-            return
-        if action != "render" or message is None or message in seen_messages:
-            return
-        seen_messages.add(message)
-        _print_warning_message(message, target_console)
-
-    original_stdout = sys.stdout
-    original_stderr = sys.stderr
-    captured_stdout = _RuntimeOutputCapture(
-        lambda line, terminated: _emit(line, terminated, original_stdout),
-        original_stdout,
-    )
-    captured_stderr = _RuntimeOutputCapture(
-        lambda line, terminated: _emit(line, terminated, original_stderr),
-        original_stderr,
-    )
-    sys.stdout = captured_stdout
-    sys.stderr = captured_stderr
-    try:
-        yield
-    finally:
-        captured_stdout.flush()
-        captured_stderr.flush()
-        sys.stdout = original_stdout
-        sys.stderr = original_stderr
 
 
 def _format_log_record_message(record: logging.LogRecord) -> str:
@@ -429,16 +254,12 @@ def suppress_warnings() -> None:
 
 def setup_logging(level: str = "WARNING") -> logging.Logger:
     """Setup logging configuration."""
-    global _VERBOSE_LOGGING_ENABLED
-    requested_level = getattr(logging, level.upper())
     logging.basicConfig(
         format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
         handlers=[logging.StreamHandler(sys.stdout)],
-        level=requested_level,
+        level=getattr(logging, level.upper()),
     )
-    logging.getLogger().setLevel(requested_level)
-    _VERBOSE_LOGGING_ENABLED = requested_level <= logging.INFO
 
     # Suppress verbose transformers/datasets logs
     logging.getLogger("transformers").setLevel(logging.WARNING)

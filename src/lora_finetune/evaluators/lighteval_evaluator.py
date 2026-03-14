@@ -7,6 +7,7 @@ import warnings
 from typing import Any, Dict, Optional
 
 import torch
+from rich.console import Console
 from transformers import PreTrainedModel
 from transformers.trainer_callback import TrainerCallback, TrainerControl, TrainerState
 from transformers.training_args import TrainingArguments
@@ -14,14 +15,12 @@ from transformers.training_args import TrainingArguments
 from ..utils import (
     RichWarningHandler,
     WarningRule,
-    capture_runtime_output,
     configure_warning_loggers,
-    console,
     restore_logger_configuration,
-    verbose_logging_enabled,
 )
 
 logger = logging.getLogger(__name__)
+console = Console()
 
 
 LIGHTEVAL_WARNING_RULES = (
@@ -178,40 +177,36 @@ def run_lighteval(
         results = None
 
         try:
-            with capture_runtime_output(
-                enabled=not verbose_logging_enabled(),
-                rich_console=warn_console,
-            ):
-                pipeline = pipeline_cls(
-                    tasks=tasks,
-                    pipeline_parameters=pipeline_params,
-                    evaluation_tracker=evaluation_tracker,
-                    model_config=model_config,
-                    model=model,
+            pipeline = pipeline_cls(
+                tasks=tasks,
+                pipeline_parameters=pipeline_params,
+                evaluation_tracker=evaluation_tracker,
+                model_config=model_config,
+                model=model,
+            )
+
+            # Capture any loggers created during Pipeline init
+            configure_warning_loggers(["lighteval"], warning_handler, saved=saved_logging)
+
+            # Prevent cleanup() from deleting the model (we still need it for training)
+            pipeline.model.cleanup = lambda: None
+
+            # Replace lighteval's tqdm with our Rich bridge (or disable it)
+            _orig_tqdm = transformers_model_module.tqdm
+            if rich_progress is not None:
+                transformers_model_module.tqdm = lambda iterable=None, **kw: _RichTqdmBridge(
+                    iterable, progress=rich_progress, task_label=progress_label, **kw
+                )
+            else:
+                transformers_model_module.tqdm = lambda iterable=None, **kw: _RichTqdmBridge(
+                    iterable, **kw
                 )
 
-                # Capture any loggers created during Pipeline init
-                configure_warning_loggers(["lighteval"], warning_handler, saved=saved_logging)
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", message=".*generation flags are not valid.*")
+                pipeline.evaluate()
 
-                # Prevent cleanup() from deleting the model (we still need it for training)
-                pipeline.model.cleanup = lambda: None
-
-                # Replace lighteval's tqdm with our Rich bridge (or disable it)
-                _orig_tqdm = transformers_model_module.tqdm
-                if rich_progress is not None:
-                    transformers_model_module.tqdm = lambda iterable=None, **kw: _RichTqdmBridge(
-                        iterable, progress=rich_progress, task_label=progress_label, **kw
-                    )
-                else:
-                    transformers_model_module.tqdm = lambda iterable=None, **kw: _RichTqdmBridge(
-                        iterable, **kw
-                    )
-
-                with warnings.catch_warnings():
-                    warnings.filterwarnings("ignore", message=".*generation flags are not valid.*")
-                    pipeline.evaluate()
-
-                results = pipeline.get_results()
+            results = pipeline.get_results()
         finally:
             restore_logger_configuration(saved_logging)
             if _orig_tqdm is not None:

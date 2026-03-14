@@ -1,7 +1,6 @@
 """Tests for benchmark evaluators using lighteval."""
 
 import logging
-from contextlib import contextmanager
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -162,35 +161,6 @@ class TestRunLighteval:
         assert model_config_kwargs["model_name"] == "Mistral-7B-v0.1"
         assert model_config_kwargs["tokenizer"] == str(model_path)
         assert model_config_kwargs["cache_dir"]
-
-    def test_run_lighteval_uses_runtime_capture_in_normal_mode(self, monkeypatch):
-        """Ensure normal-mode lighteval wraps third-party stdout/stderr capture."""
-        mock_pipeline = MagicMock()
-        mock_pipeline.get_results.return_value = {
-            "results": {"gsm8k_0": {"expr_gold_metric": 0.42}}
-        }
-        components, _ = _mock_lighteval_components(mock_pipeline)
-        capture_calls = []
-
-        @contextmanager
-        def fake_capture_runtime_output(*, enabled=True, rich_console=None):
-            capture_calls.append((enabled, rich_console))
-            yield
-
-        monkeypatch.setattr(
-            lighteval_evaluator, "capture_runtime_output", fake_capture_runtime_output
-        )
-        monkeypatch.setattr(lighteval_evaluator, "verbose_logging_enabled", lambda: False)
-
-        model = MagicMock()
-        with patch(
-            "lora_finetune.evaluators.lighteval_evaluator._import_lighteval_components",
-            return_value=components,
-        ):
-            run_lighteval(model=model, model_name="test-model", tasks="gsm8k")
-
-        assert len(capture_calls) == 1
-        assert capture_calls[0][0] is True
 
 
 class TestLightEvalLoggingHelpers:

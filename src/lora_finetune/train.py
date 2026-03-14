@@ -2,6 +2,7 @@
 
 import logging
 
+from rich.console import Console
 from rich.panel import Panel
 from rich.status import Status
 from rich.table import Table
@@ -32,16 +33,14 @@ from .trainer import (
     prepare_model_for_training,
 )
 from .utils import (
-    capture_runtime_output,
-    console,
     get_method_display_name,
     print_model_size,
     set_seed,
     setup_logging,
     suppress_warnings,
-    verbose_logging_enabled,
 )
 
+console = Console()
 logger = logging.getLogger(__name__)
 
 
@@ -70,36 +69,32 @@ def run_benchmark_eval(model, model_name: str, eval_config: BenchmarkEvalConfig)
 def train_llm(config: Config) -> None:
     """Train a language model with LoRA."""
     with Status("[bold blue]Loading model...", console=console):
-        with capture_runtime_output(
-            enabled=not verbose_logging_enabled(),
-            rich_console=console,
-        ):
-            model, tokenizer = load_model_and_tokenizer(
-                config.model,
-                max_seq_length=config.data.max_seq_length,
-            )
+        model, tokenizer = load_model_and_tokenizer(
+            config.model,
+            max_seq_length=config.data.max_seq_length,
+        )
 
-            if config.lora.target_modules is None or config.lora.target_modules == [
-                "q_proj",
-                "v_proj",
-                "k_proj",
-                "o_proj",
-            ]:
-                config.lora.target_modules = get_llm_target_modules(config.model.model_name_or_path)
+        if config.lora.target_modules is None or config.lora.target_modules == [
+            "q_proj",
+            "v_proj",
+            "k_proj",
+            "o_proj",
+        ]:
+            config.lora.target_modules = get_llm_target_modules(config.model.model_name_or_path)
 
-            is_quantized = config.model.load_in_4bit or config.model.load_in_8bit
-            model = get_peft_model_with_lora(
-                model,
-                config.lora,
-                model_type=config.model.model_type,
-                is_quantized=is_quantized,
-                use_unsloth=config.model.use_unsloth,
-                use_gradient_checkpointing=config.training.gradient_checkpointing,
-                random_state=config.training.seed,
-                max_seq_length=config.data.max_seq_length,
-            )
+        is_quantized = config.model.load_in_4bit or config.model.load_in_8bit
+        model = get_peft_model_with_lora(
+            model,
+            config.lora,
+            model_type=config.model.model_type,
+            is_quantized=is_quantized,
+            use_unsloth=config.model.use_unsloth,
+            use_gradient_checkpointing=config.training.gradient_checkpointing,
+            random_state=config.training.seed,
+            max_seq_length=config.data.max_seq_length,
+        )
 
-            model = prepare_model_for_training(model, config.training, tokenizer)
+        model = prepare_model_for_training(model, config.training, tokenizer)
 
     print_model_size(model)
 
@@ -162,11 +157,7 @@ def train_llm(config: Config) -> None:
         callbacks=callbacks if callbacks else None,
     )
 
-    with capture_runtime_output(
-        enabled=not verbose_logging_enabled(),
-        rich_console=console,
-    ):
-        trainer.train(resume_from_checkpoint=config.training.resume_from_checkpoint)
+    trainer.train(resume_from_checkpoint=config.training.resume_from_checkpoint)
 
     with Status("[bold blue]Saving model...", console=console):
         trainer.save_model()
@@ -191,31 +182,25 @@ def train_vision(config: Config) -> None:
         num_labels = get_num_labels_from_dataset(dataset[config.data.train_split])
 
     with Status("[bold blue]Loading model...", console=console):
-        with capture_runtime_output(
-            enabled=not verbose_logging_enabled(),
-            rich_console=console,
-        ):
-            model, image_processor = load_model_and_tokenizer(config.model, num_labels=num_labels)
+        model, image_processor = load_model_and_tokenizer(config.model, num_labels=num_labels)
 
-            if config.lora.target_modules is None or config.lora.target_modules == [
-                "q_proj",
-                "v_proj",
-                "k_proj",
-                "o_proj",
-            ]:
-                config.lora.target_modules = get_vision_target_modules(
-                    config.model.model_name_or_path
-                )
+        if config.lora.target_modules is None or config.lora.target_modules == [
+            "q_proj",
+            "v_proj",
+            "k_proj",
+            "o_proj",
+        ]:
+            config.lora.target_modules = get_vision_target_modules(config.model.model_name_or_path)
 
-            is_quantized = config.model.load_in_4bit or config.model.load_in_8bit
-            model = get_peft_model_with_lora(
-                model,
-                config.lora,
-                model_type="vision",
-                is_quantized=is_quantized,
-            )
+        is_quantized = config.model.load_in_4bit or config.model.load_in_8bit
+        model = get_peft_model_with_lora(
+            model,
+            config.lora,
+            model_type="vision",
+            is_quantized=is_quantized,
+        )
 
-            model = prepare_model_for_training(model, config.training)
+        model = prepare_model_for_training(model, config.training)
 
     print_model_size(model)
 
@@ -244,11 +229,7 @@ def train_vision(config: Config) -> None:
         lora_config=config.lora,
     )
 
-    with capture_runtime_output(
-        enabled=not verbose_logging_enabled(),
-        rich_console=console,
-    ):
-        trainer.train(resume_from_checkpoint=config.training.resume_from_checkpoint)
+    trainer.train(resume_from_checkpoint=config.training.resume_from_checkpoint)
 
     with Status("[bold blue]Saving model...", console=console):
         trainer.save_model()
