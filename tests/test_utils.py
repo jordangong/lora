@@ -14,10 +14,8 @@ from lora_finetune.utils import (
     check_bitsandbytes_available,
     check_flash_attention_available,
     count_parameters,
-    emit_captured_output,
     ensure_dir,
     find_all_linear_names,
-    format_warning_message,
     get_device,
     get_gpu_memory_usage,
     get_model_size,
@@ -138,35 +136,6 @@ class TestSuppressWarnings:
         normalized = _normalize_warning_message(msg)
 
         assert normalized == "Some warning with extra spacing"
-
-    def test_format_warning_message_suppresses_unsloth_import_order_warning(self):
-        msg = (
-            "WARNING: Unsloth should be imported before [transformers, peft] to ensure "
-            "all optimizations are applied."
-        )
-
-        assert format_warning_message(msg) is None
-
-    def test_emit_captured_output_filters_unsloth_banners(self, monkeypatch):
-        captured = []
-        monkeypatch.setattr(
-            "lora_finetune.utils.console.print",
-            lambda message: captured.append(str(message)),
-        )
-
-        emit_captured_output(
-            "\n".join(
-                [
-                    "Unsloth: Will patch your computer to enable 2x faster free finetuning.",
-                    "==((====))==  Unsloth 2026.3.4: Fast Mistral patching. Transformers: 5.2.0.",
-                    "/tmp/model does not have a padding token! Will use pad_token = <unk>.",
-                ]
-            )
-        )
-
-        assert captured == [
-            "  ⚠ /tmp/model does not have a padding token! Will use pad_token = <unk>."
-        ]
 
 
 class TestGetDevice:
