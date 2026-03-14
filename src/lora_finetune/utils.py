@@ -204,7 +204,12 @@ def _classify_captured_output_message(msg: str) -> tuple[CapturedOutputAction, O
         return "suppress", None
 
     if formatted.startswith("The following layers were not sharded:"):
-        return "render", _summarize_sharded_layers(_parse_sharded_layer_tokens(formatted))
+        raw_layers = formatted.split(":", 1)[1]
+        layers = [layer.strip() for layer in raw_layers.split(",") if layer.strip()]
+        preview = ", ".join(layers[:4])
+        if len(layers) > 4:
+            preview += ", ..."
+        return "render", f"Some layers were not sharded: {preview}"
 
     for rule in CAPTURED_OUTPUT_RULES:
         if not _warning_rule_matches(formatted, "", rule):
@@ -226,40 +231,6 @@ def _print_warning_message(msg: str, rich_console: Optional[Console] = None) -> 
     target_console.print(Text(f"  ⚠ {msg}", style="dim yellow"))
 
 
-def _parse_sharded_layer_tokens(msg: str) -> list[str]:
-    raw_layers = msg.split(":", 1)[1] if ":" in msg else msg
-    return [layer.strip() for layer in raw_layers.split(",") if layer.strip()]
-
-
-def _summarize_sharded_layers(layers: Sequence[str]) -> str:
-    preview = ", ".join(layers[:4])
-    if len(layers) > 4:
-        preview += ", ..."
-    return f"Some layers were not sharded: {preview}"
-
-
-def _looks_like_sharded_layer_continuation(msg: str) -> bool:
-    if not msg:
-        return False
-    tokens = [token.strip() for token in msg.split(",") if token.strip()]
-    if not tokens:
-        return False
-    return all(
-        re.fullmatch(r"[\w.*\[\]-]+", token) is not None
-        and (".weight" in token or ".bias" in token)
-        for token in tokens
-    )
-
-
-def _unwrap_passthrough_stream(stream):
-    unwrapped = stream
-    seen: set[int] = set()
-    while hasattr(unwrapped, "rich_proxied_file") and id(unwrapped) not in seen:
-        seen.add(id(unwrapped))
-        unwrapped = unwrapped.rich_proxied_file
-    return unwrapped
-
-
 def verbose_logging_enabled() -> bool:
     """Return whether runtime logging is configured for verbose output."""
     return _VERBOSE_LOGGING_ENABLED
@@ -277,17 +248,10 @@ class _RuntimeOutputCapture:
     def write(self, data: str) -> int:
         if not data:
             return 0
-        normalized = data.replace("\r\n", "\n")
-        start = 0
-        for index, char in enumerate(normalized):
-            if char not in {"\n", "\r"}:
-                continue
-            self._buffer += normalized[start:index]
-            if char == "\n":
-                self._emitter(self._buffer, True)
-            self._buffer = ""
-            start = index + 1
-        self._buffer += normalized[start:]
+        self._buffer += data.replace("\r\n", "\n").replace("\r", "\n")
+        while "\n" in self._buffer:
+            line, self._buffer = self._buffer.split("\n", 1)
+            self._emitter(line, True)
         return len(data)
 
     def flush(self) -> None:
@@ -317,40 +281,13 @@ def capture_runtime_output(
 
     target_console = rich_console or console
     seen_messages: set[str] = set()
-    pending_sharded_layers: list[str] = []
-
-    def _flush_pending_sharded_layers() -> None:
-        nonlocal pending_sharded_layers
-        if not pending_sharded_layers:
-            return
-        message = _summarize_sharded_layers(pending_sharded_layers)
-        pending_sharded_layers = []
-        if message in seen_messages:
-            return
-        seen_messages.add(message)
-        _print_warning_message(message, target_console)
 
     def _emit(line: str, terminated: bool, fallback_stream) -> None:
-        nonlocal pending_sharded_layers
-        formatted = _normalize_warning_message(line)
-        if pending_sharded_layers:
-            if formatted and _looks_like_sharded_layer_continuation(formatted):
-                pending_sharded_layers.extend(_parse_sharded_layer_tokens(formatted))
-                if terminated and not formatted.endswith(","):
-                    _flush_pending_sharded_layers()
-                return
-            _flush_pending_sharded_layers()
-        if formatted and formatted.startswith("The following layers were not sharded:"):
-            pending_sharded_layers = _parse_sharded_layer_tokens(formatted)
-            if terminated and not formatted.endswith(","):
-                _flush_pending_sharded_layers()
-            return
         action, message = _classify_captured_output_message(line)
         if action == "passthrough":
-            passthrough_stream = _unwrap_passthrough_stream(fallback_stream)
-            passthrough_stream.write(line)
+            fallback_stream.write(line)
             if terminated:
-                passthrough_stream.write("\n")
+                fallback_stream.write("\n")
             return
         if action != "render" or message is None or message in seen_messages:
             return
@@ -374,7 +311,6 @@ def capture_runtime_output(
     finally:
         captured_stdout.flush()
         captured_stderr.flush()
-        _flush_pending_sharded_layers()
         sys.stdout = original_stdout
         sys.stderr = original_stderr
 

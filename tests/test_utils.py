@@ -1,9 +1,7 @@
 """Tests for utility functions."""
 
-import io
 import logging
 import random
-import sys
 import warnings
 
 import numpy as np
@@ -11,6 +9,7 @@ import pytest
 import torch
 
 import lora_finetune.utils as utils_module
+
 from lora_finetune.utils import (
     RichWarningHandler,
     _normalize_warning_message,
@@ -26,8 +25,8 @@ from lora_finetune.utils import (
     get_model_size,
     set_seed,
     setup_logging,
-    suppress_warnings,
     verbose_logging_enabled,
+    suppress_warnings,
 )
 
 
@@ -253,83 +252,6 @@ class TestSuppressWarnings:
 
         assert "Dependency emitted an unmatched diagnostic" in captured.out
         assert capture_console.messages == []
-
-    def test_capture_runtime_output_unwraps_rich_proxy_for_passthrough(self, monkeypatch):
-        """Ensure passthrough writes use the underlying stream instead of Rich's proxy."""
-
-        class CaptureConsole:
-            def __init__(self):
-                self.messages = []
-
-            def print(self, message):
-                self.messages.append(message)
-
-        class FakeRichProxy:
-            def __init__(self, target):
-                self.rich_proxied_file = target
-                self.encoding = "utf-8"
-
-            def write(self, text):
-                raise AssertionError("capture should write to rich_proxied_file, not the proxy")
-
-            def flush(self):
-                return None
-
-        underlying = io.StringIO()
-        proxy = FakeRichProxy(underlying)
-        monkeypatch.setattr(sys, "stdout", proxy)
-        monkeypatch.setattr(sys, "stderr", proxy)
-        capture_console = CaptureConsole()
-
-        with capture_runtime_output(enabled=True, rich_console=capture_console):
-            print("Dependency emitted an unmatched diagnostic")
-
-        assert underlying.getvalue() == "Dependency emitted an unmatched diagnostic\n"
-        assert capture_console.messages == []
-
-    def test_capture_runtime_output_drops_carriage_return_spinner_redraws(self, monkeypatch):
-        """Ensure spinner-style carriage returns do not become repeated output lines."""
-
-        class CaptureConsole:
-            def __init__(self):
-                self.messages = []
-
-            def print(self, message):
-                self.messages.append(message)
-
-        underlying = io.StringIO()
-        monkeypatch.setattr(sys, "stdout", underlying)
-        monkeypatch.setattr(sys, "stderr", underlying)
-        capture_console = CaptureConsole()
-
-        with capture_runtime_output(enabled=True, rich_console=capture_console):
-            sys.stdout.write("⠋ Loading model...\r")
-            sys.stdout.write("⠙ Loading model...\r")
-            print("Dependency emitted an unmatched diagnostic")
-
-        assert underlying.getvalue() == "Dependency emitted an unmatched diagnostic\n"
-        assert capture_console.messages == []
-
-    def test_capture_runtime_output_merges_multiline_sharded_warning(self):
-        """Ensure split sharded-layer diagnostics render as one compact warning."""
-
-        class CaptureConsole:
-            def __init__(self):
-                self.messages = []
-
-            def print(self, message):
-                self.messages.append(message)
-
-        capture_console = CaptureConsole()
-
-        with capture_runtime_output(enabled=True, rich_console=capture_console):
-            print("The following layers were not sharded: model.embed_tokens.weight,")
-            print("lm_head.weight,")
-            print("model.norm.weight, model.layers.0.input_layernorm.weight")
-
-        assert [message.plain for message in capture_console.messages] == [
-            "  ⚠ Some layers were not sharded: model.embed_tokens.weight, lm_head.weight, model.norm.weight, model.layers.0.input_layernorm.weight"
-        ]
 
 
 class TestGetDevice:
