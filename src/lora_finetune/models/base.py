@@ -158,13 +158,14 @@ def _apply_unsloth_peft_model(
             "Unsloth integration currently supports only lora, dora, loraplus, and full methods"
         )
 
+    unsloth_gradient_checkpointing = "unsloth" if use_gradient_checkpointing else False
     unsloth_kwargs = {
         "r": lora_config.r,
         "target_modules": lora_config.target_modules,
         "lora_alpha": lora_config.alpha,
         "lora_dropout": lora_config.dropout,
         "bias": lora_config.bias,
-        "use_gradient_checkpointing": use_gradient_checkpointing,
+        "use_gradient_checkpointing": unsloth_gradient_checkpointing,
         "random_state": random_state,
         "max_seq_length": max_seq_length,
         "use_rslora": lora_config.use_rslora,
