@@ -4,6 +4,7 @@ import inspect
 import logging
 import math
 import os
+from dataclasses import asdict
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Union
 
@@ -34,10 +35,19 @@ except ImportError:
     SFTConfig = None
     SFTTrainer = None
 
-from .config import DataConfig, LoraConfig, ModelConfig, TrainingConfig
+from .config import BenchmarkEvalConfig, DataConfig, LoraConfig, ModelConfig, TrainingConfig
 from .utils import capture_stdout, console
 
 logger = logging.getLogger(__name__)
+_SENSITIVE_WANDB_CONFIG_KEYS = {
+    "access_token",
+    "api_key",
+    "auth_token",
+    "hf_token",
+    "hub_token",
+    "password",
+    "secret",
+}
 
 
 class RichProgressCallback(TrainerCallback):
@@ -415,7 +425,78 @@ def generate_run_id() -> str:
     return datetime.now().strftime("%Y%m%d_%H%M%S")
 
 
-def setup_wandb(config: TrainingConfig) -> Optional[str]:
+def _sanitize_wandb_config(value: Any, key: Optional[str] = None) -> Any:
+    if isinstance(key, str) and key.lower() in _SENSITIVE_WANDB_CONFIG_KEYS:
+        return "***REDACTED***" if value is not None else None
+    if isinstance(value, dict):
+        return {
+            nested_key: _sanitize_wandb_config(
+                nested_value,
+                key=nested_key if isinstance(nested_key, str) else None,
+            )
+            for nested_key, nested_value in value.items()
+        }
+    if isinstance(value, list):
+        return [_sanitize_wandb_config(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_sanitize_wandb_config(item) for item in value)
+    return value
+
+
+def _build_wandb_config_payload(
+    training_config: TrainingConfig,
+    model_config: Optional[ModelConfig] = None,
+    data_config: Optional[DataConfig] = None,
+    lora_config: Optional[LoraConfig] = None,
+    benchmark_eval_config: Optional[BenchmarkEvalConfig] = None,
+) -> Dict[str, Any]:
+    config_payload: Dict[str, Any] = {"training": asdict(training_config)}
+    if model_config is not None:
+        config_payload["model"] = asdict(model_config)
+    if data_config is not None:
+        config_payload["data"] = asdict(data_config)
+    if lora_config is not None:
+        config_payload["lora"] = asdict(lora_config)
+    if benchmark_eval_config is not None:
+        config_payload["benchmark_eval"] = asdict(benchmark_eval_config)
+    return _sanitize_wandb_config(config_payload)
+
+
+def _sync_wandb_config(
+    training_config: TrainingConfig,
+    model_config: Optional[ModelConfig] = None,
+    data_config: Optional[DataConfig] = None,
+    lora_config: Optional[LoraConfig] = None,
+    benchmark_eval_config: Optional[BenchmarkEvalConfig] = None,
+) -> None:
+    if training_config.report_to != "wandb":
+        return
+    try:
+        import wandb
+    except ImportError:
+        return
+    if wandb.run is None or getattr(wandb, "config", None) is None:
+        return
+    config_payload = _build_wandb_config_payload(
+        training_config=training_config,
+        model_config=model_config,
+        data_config=data_config,
+        lora_config=lora_config,
+        benchmark_eval_config=benchmark_eval_config,
+    )
+    try:
+        wandb.config.update(config_payload, allow_val_change=True)
+    except TypeError:
+        wandb.config.update(config_payload)
+
+
+def setup_wandb(
+    config: TrainingConfig,
+    model_config: Optional[ModelConfig] = None,
+    data_config: Optional[DataConfig] = None,
+    lora_config: Optional[LoraConfig] = None,
+    benchmark_eval_config: Optional[BenchmarkEvalConfig] = None,
+) -> Optional[str]:
     """Setup wandb logging and return run name for output directory."""
     if config.report_to != "wandb":
         return None
@@ -430,18 +511,27 @@ def setup_wandb(config: TrainingConfig) -> Optional[str]:
     os.environ["WANDB_WATCH"] = wandb_watch
     os.environ["WANDB_LOG_MODEL"] = "true" if config.wandb_log_model else "false"
 
+    config_payload = _build_wandb_config_payload(
+        training_config=config,
+        model_config=model_config,
+        data_config=data_config,
+        lora_config=lora_config,
+        benchmark_eval_config=benchmark_eval_config,
+    )
+
     if wandb.run is None:
         wandb.init(
             project=config.wandb_project or "lora-finetune",
             name=config.wandb_run_name,
-            config={
-                "output_dir": config.output_dir,
-                "learning_rate": config.learning_rate,
-                "num_epochs": config.num_train_epochs,
-                "batch_size": config.per_device_train_batch_size,
-                "gradient_accumulation_steps": config.gradient_accumulation_steps,
-            },
+            config=config_payload,
         )
+    _sync_wandb_config(
+        training_config=config,
+        model_config=model_config,
+        data_config=data_config,
+        lora_config=lora_config,
+        benchmark_eval_config=benchmark_eval_config,
+    )
 
     return wandb.run.name if wandb.run else None
 
@@ -639,6 +729,7 @@ def create_trainer(
     model_config: ModelConfig,
     train_dataset,
     data_config: Optional[DataConfig] = None,
+    benchmark_eval_config: Optional[BenchmarkEvalConfig] = None,
     eval_dataset=None,
     processing_class=None,
     data_collator: Optional[DataCollator] = None,
@@ -655,11 +746,24 @@ def create_trainer(
             "or set training.eval_strategy='no'."
         )
 
-    wandb_run_name = setup_wandb(training_config)
+    wandb_run_name = setup_wandb(
+        training_config,
+        model_config=model_config,
+        data_config=data_config,
+        lora_config=lora_config,
+        benchmark_eval_config=benchmark_eval_config,
+    )
 
     # Generate unique run identifier for output directory
     run_id = wandb_run_name if wandb_run_name else generate_run_id()
     training_config.output_dir = os.path.join(training_config.output_dir, run_id)
+    _sync_wandb_config(
+        training_config=training_config,
+        model_config=model_config,
+        data_config=data_config,
+        lora_config=lora_config,
+        benchmark_eval_config=benchmark_eval_config,
+    )
 
     logger.info(f"Creating trainer with output_dir={training_config.output_dir}")
     try:

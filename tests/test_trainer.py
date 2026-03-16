@@ -10,7 +10,13 @@ import torch
 from torch import nn
 
 import lora_finetune.trainer as trainer_module
-from lora_finetune.config import DataConfig, LoraConfig, ModelConfig, TrainingConfig
+from lora_finetune.config import (
+    BenchmarkEvalConfig,
+    DataConfig,
+    LoraConfig,
+    ModelConfig,
+    TrainingConfig,
+)
 from lora_finetune.trainer import (
     LoraTrainer,
     RichProgressCallback,
@@ -887,6 +893,59 @@ class TestSetupWandb:
         assert wandb_module.init_kwargs["name"] == "test-run"
         assert os.environ["WANDB_WATCH"] == "all"
         assert os.environ["WANDB_LOG_MODEL"] == "true"
+
+    def test_setup_wandb_logs_full_config_sections_and_redacts_sensitive_values(self, monkeypatch):
+        wandb_module = ModuleType("wandb")
+        wandb_module.run = None
+        wandb_module.init_kwargs = None
+
+        class FakeWandbConfig:
+            def __init__(self):
+                self.updates = []
+
+            def update(self, payload, allow_val_change=False):
+                self.updates.append((payload, allow_val_change))
+
+        wandb_module.config = FakeWandbConfig()
+
+        def init(**kwargs):
+            wandb_module.init_kwargs = kwargs
+            wandb_module.run = type("Run", (), {"name": "full-config-run"})()
+
+        wandb_module.init = init
+
+        monkeypatch.setitem(sys.modules, "wandb", wandb_module)
+
+        training_config = TrainingConfig(
+            report_to="wandb",
+            output_dir="./outputs",
+            hub_token="super-secret",
+        )
+        model_config = ModelConfig(model_name_or_path="test-model")
+        data_config = DataConfig(text_column="prompt")
+        lora_config = LoraConfig(method="adalora", target_r=4)
+        benchmark_eval_config = BenchmarkEvalConfig(enabled=True, tasks="gsm8k,mmlu")
+
+        run_name = setup_wandb(
+            training_config,
+            model_config=model_config,
+            data_config=data_config,
+            lora_config=lora_config,
+            benchmark_eval_config=benchmark_eval_config,
+        )
+
+        assert run_name == "full-config-run"
+        assert "training" in wandb_module.init_kwargs["config"]
+        assert "model" in wandb_module.init_kwargs["config"]
+        assert "data" in wandb_module.init_kwargs["config"]
+        assert "lora" in wandb_module.init_kwargs["config"]
+        assert "benchmark_eval" in wandb_module.init_kwargs["config"]
+        assert wandb_module.init_kwargs["config"]["training"]["hub_token"] == "***REDACTED***"
+        assert wandb_module.init_kwargs["config"]["model"]["model_name_or_path"] == "test-model"
+        assert wandb_module.init_kwargs["config"]["data"]["text_column"] == "prompt"
+        assert wandb_module.init_kwargs["config"]["lora"]["method"] == "adalora"
+        assert wandb_module.init_kwargs["config"]["benchmark_eval"]["tasks"] == "gsm8k,mmlu"
+        assert wandb_module.config.updates[-1][0]["training"]["hub_token"] == "***REDACTED***"
 
 
 class TestRichProgressCallback:
