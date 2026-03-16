@@ -215,6 +215,24 @@ def run_benchmark_eval(model, model_name: str, eval_config: BenchmarkEvalConfig)
     console.print(table)
 
 
+def _cleanup_trainer_callbacks(trainer) -> None:
+    callback_handler = getattr(trainer, "callback_handler", None)
+    if callback_handler is None:
+        return
+
+    for callback in getattr(callback_handler, "callbacks", []):
+        cleanup = getattr(callback, "cleanup", None)
+        if callable(cleanup):
+            cleanup()
+
+
+def _run_trainer_training(trainer, resume_from_checkpoint=None) -> None:
+    try:
+        trainer.train(resume_from_checkpoint=resume_from_checkpoint)
+    finally:
+        _cleanup_trainer_callbacks(trainer)
+
+
 def train_llm(config: Config) -> None:
     """Train a language model with LoRA."""
     _ensure_runtime_imports()
@@ -317,7 +335,7 @@ def train_llm(config: Config) -> None:
         callbacks=callbacks if callbacks else None,
     )
 
-    trainer.train(resume_from_checkpoint=config.training.resume_from_checkpoint)
+    _run_trainer_training(trainer, resume_from_checkpoint=config.training.resume_from_checkpoint)
 
     with Status("[bold blue]Saving model...", console=console):
         trainer.save_model()
@@ -403,7 +421,7 @@ def train_vision(config: Config) -> None:
         lora_config=config.lora,
     )
 
-    trainer.train(resume_from_checkpoint=config.training.resume_from_checkpoint)
+    _run_trainer_training(trainer, resume_from_checkpoint=config.training.resume_from_checkpoint)
 
     with Status("[bold blue]Saving model...", console=console):
         trainer.save_model()

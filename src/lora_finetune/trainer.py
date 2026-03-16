@@ -205,60 +205,76 @@ class RichProgressCallback(TrainerCallback):
                 total=num_steps,
             )
 
+    def cleanup(self):
+        progress = self.progress
+        self.progress = None
+        self.train_task = None
+        self.eval_task = None
+        self.in_eval = False
+
+        try:
+            if progress is not None:
+                progress.stop()
+        finally:
+            try:
+                if progress is not None and getattr(progress, "console", None) is not None:
+                    progress.console.show_cursor(True)
+                else:
+                    console.show_cursor(True)
+            except Exception:
+                pass
+
     def on_train_end(self, args, state, control, **kwargs):
         """Clean up progress bar and show final stats."""
-        if self.progress:
-            self.progress.stop()
+        try:
+            table = Table(show_header=False, box=None)
+            table.add_column("Metric", style="bold")
+            table.add_column("Value", justify="right", style="cyan")
 
-        # Build final stats table
-        table = Table(show_header=False, box=None)
-        table.add_column("Metric", style="bold")
-        table.add_column("Value", justify="right", style="cyan")
+            if state.log_history:
+                train_runtime = None
+                total_flos = None
+                train_loss = None
+                train_samples_per_second = None
 
-        # Format training time as hh:mm:ss
-        if state.log_history:
-            train_runtime = None
-            total_flos = None
-            train_loss = None
-            train_samples_per_second = None
+                for log in reversed(state.log_history):
+                    if "train_runtime" in log:
+                        train_runtime = log["train_runtime"]
+                    if "total_flos" in log:
+                        total_flos = log["total_flos"]
+                    if "train_loss" in log:
+                        train_loss = log["train_loss"]
+                    if "train_samples_per_second" in log:
+                        train_samples_per_second = log["train_samples_per_second"]
+                    if all([train_runtime, total_flos]):
+                        break
 
-            # Get metrics from last log entry
-            for log in reversed(state.log_history):
-                if "train_runtime" in log:
-                    train_runtime = log["train_runtime"]
-                if "total_flos" in log:
-                    total_flos = log["total_flos"]
-                if "train_loss" in log:
-                    train_loss = log["train_loss"]
-                if "train_samples_per_second" in log:
-                    train_samples_per_second = log["train_samples_per_second"]
-                if all([train_runtime, total_flos]):
-                    break
+                if train_runtime:
+                    hours, remainder = divmod(int(train_runtime), 3600)
+                    minutes, seconds = divmod(remainder, 60)
+                    table.add_row("Training time", f"{hours:02d}:{minutes:02d}:{seconds:02d}")
 
-            if train_runtime:
-                hours, remainder = divmod(int(train_runtime), 3600)
-                minutes, seconds = divmod(remainder, 60)
-                table.add_row("Training time", f"{hours:02d}:{minutes:02d}:{seconds:02d}")
+                if train_loss is not None:
+                    table.add_row("Final loss", f"{train_loss:.4f}")
 
-            if train_loss is not None:
-                table.add_row("Final loss", f"{train_loss:.4f}")
+                if train_samples_per_second:
+                    table.add_row("Samples/second", f"{train_samples_per_second:.2f}")
 
-            if train_samples_per_second:
-                table.add_row("Samples/second", f"{train_samples_per_second:.2f}")
+                if total_flos:
+                    table.add_row("Total FLOPs", f"{total_flos:.2e}")
 
-            if total_flos:
-                table.add_row("Total FLOPs", f"{total_flos:.2e}")
+            table.add_row("Total steps", str(state.global_step))
+            table.add_row("Epochs completed", self._format_epoch(state.epoch))
 
-        table.add_row("Total steps", str(state.global_step))
-        table.add_row("Epochs completed", self._format_epoch(state.epoch))
-
-        console.print(
-            Panel(
-                table,
-                title="[bold green]✓ Training Complete[/bold green]",
-                border_style="green",
+            console.print(
+                Panel(
+                    table,
+                    title="[bold green]✓ Training Complete[/bold green]",
+                    border_style="green",
+                )
             )
-        )
+        finally:
+            self.cleanup()
 
 
 def _get_training_arguments_kwargs(

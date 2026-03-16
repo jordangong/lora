@@ -2,6 +2,7 @@
 
 import argparse
 
+import pytest
 from datasets import Dataset, DatasetDict
 from torch import nn
 
@@ -171,6 +172,76 @@ class TestTrainLlm:
         assert peft_calls[0]["use_gradient_checkpointing"] is False
         assert peft_calls[0]["random_state"] == 123
         assert peft_calls[0]["max_seq_length"] == 4096
+
+    def test_train_llm_cleans_up_callbacks_on_keyboard_interrupt(self, monkeypatch):
+        model = nn.Linear(10, 5)
+        dataset = DatasetDict({"train": Dataset.from_dict({"text": ["hello"]})})
+        config = Config(
+            model=ModelConfig(model_type="causal_lm"),
+            data=DataConfig(preprocessing_num_workers=1),
+            training=TrainingConfig(
+                output_dir="./test-output",
+                eval_strategy="no",
+                load_best_model_at_end=False,
+                report_to="none",
+                llm_trainer="transformers",
+            ),
+        )
+
+        cleanup_calls = []
+
+        class MockTokenizer:
+            pad_token_id = 0
+
+        class CleanupCallback:
+            def cleanup(self):
+                cleanup_calls.append("cleanup")
+
+        class FakeCallbackHandler:
+            def __init__(self):
+                self.callbacks = [CleanupCallback()]
+
+        class FakeTrainer:
+            def __init__(self):
+                self.callback_handler = FakeCallbackHandler()
+                self.save_model_calls = 0
+
+            def train(self, resume_from_checkpoint=None):
+                raise KeyboardInterrupt
+
+            def save_model(self):
+                self.save_model_calls += 1
+
+            def push_to_hub(self):
+                return None
+
+        trainer = FakeTrainer()
+
+        monkeypatch.setattr(
+            train_module,
+            "load_model_and_tokenizer",
+            lambda model_config, max_seq_length=None: (model, MockTokenizer()),
+        )
+        monkeypatch.setattr(train_module, "get_llm_target_modules", lambda model_name: ["q_proj"])
+        monkeypatch.setattr(train_module, "get_peft_model_with_lora", lambda *args, **kwargs: model)
+        monkeypatch.setattr(
+            train_module, "prepare_model_for_training", lambda *args, **kwargs: model
+        )
+        monkeypatch.setattr(train_module, "print_model_size", lambda *args, **kwargs: None)
+        monkeypatch.setattr(train_module, "load_text_dataset", lambda data_config: dataset)
+        monkeypatch.setattr(train_module, "get_text_collator", lambda tokenizer: "collator")
+        monkeypatch.setattr(
+            train_module,
+            "preprocess_text_dataset",
+            lambda raw_dataset, tokenizer, data_config, shuffle_seed=None: raw_dataset,
+        )
+        monkeypatch.setattr(train_module, "create_trainer", lambda **kwargs: trainer)
+
+        with pytest.raises(KeyboardInterrupt):
+            train_module.train_llm(config)
+
+        assert cleanup_calls == ["cleanup"]
+        assert trainer.save_model_calls == 0
 
 
 class TestMainBootstrap:

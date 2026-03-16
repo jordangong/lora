@@ -920,6 +920,34 @@ class TestRichProgressCallback:
         callback._start_eval_progress(10)
         assert callback.eval_task is None
 
+    def test_cleanup_stops_progress_and_restores_cursor(self):
+        callback = RichProgressCallback()
+        events = []
+
+        class FakeConsole:
+            def show_cursor(self, show=True):
+                events.append(("show_cursor", show))
+
+        class FakeProgress:
+            def __init__(self):
+                self.console = FakeConsole()
+
+            def stop(self):
+                events.append("stop")
+
+        callback.progress = FakeProgress()
+        callback.train_task = 1
+        callback.eval_task = 2
+        callback.in_eval = True
+
+        callback.cleanup()
+
+        assert events == ["stop", ("show_cursor", True)]
+        assert callback.progress is None
+        assert callback.train_task is None
+        assert callback.eval_task is None
+        assert callback.in_eval is False
+
     def test_format_epoch_handles_non_numeric_values(self):
         """Test _format_epoch handles missing and string epochs safely."""
         assert RichProgressCallback._format_epoch(None) == "?"
