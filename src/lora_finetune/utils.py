@@ -18,7 +18,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-console = Console()
+console = Console(file=sys.stdout)
 
 _capture_logger = logging.getLogger(__name__ + ".captured_stdout")
 
@@ -106,19 +106,9 @@ WARNING_RULES = (
         contains_any=("as a legacy tokenizer",),
         suppress=True,
     ),
-    # Transformers TP sharding detail — not actionable for LoRA users
-    WarningRule(
-        contains_any=("following layers were not sharded",),
-        suppress=True,
-    ),
     # Unsloth fast download notice — already handled by progress bars
     WarningRule(
         contains_any=("Fast downloading is enabled",),
-        suppress=True,
-    ),
-    # warmup_ratio deprecation — we handle this at the source
-    WarningRule(
-        contains_any=("warmup_ratio is deprecated",),
         suppress=True,
     ),
 )

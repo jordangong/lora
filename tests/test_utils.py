@@ -455,11 +455,11 @@ class TestNewWarningRules:
         result = format_warning_message("Unsloth: Will load /tmp/foo as a legacy tokenizer.")
         assert result is None
 
-    def test_suppresses_layers_not_sharded(self):
+    def test_keeps_layers_not_sharded(self):
         result = format_warning_message(
             "The following layers were not sharded: model.layers.*.weight, lm_head.weight"
         )
-        assert result is None
+        assert result is not None
 
     def test_suppresses_fast_downloading(self):
         result = format_warning_message(
@@ -467,9 +467,9 @@ class TestNewWarningRules:
         )
         assert result is None
 
-    def test_suppresses_warmup_ratio_deprecation(self):
+    def test_keeps_warmup_ratio_deprecation(self):
         result = format_warning_message("warmup_ratio is deprecated and will be removed in v5.2")
-        assert result is None
+        assert result is not None
 
     def test_keeps_dropout_warning(self):
         result = format_warning_message(
