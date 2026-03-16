@@ -1,7 +1,10 @@
 """Optional Unsloth bootstrap helpers."""
 
+from .utils import capture_stdout
+
 try:
-    import unsloth
+    with capture_stdout():
+        import unsloth
 except ImportError:
     unsloth = None
 

@@ -29,7 +29,7 @@ from transformers import (
 
 from .._optional_unsloth import FastLanguageModel
 from ..config import LoraConfig, ModelConfig
-from ..utils import get_method_display_name
+from ..utils import capture_stdout, get_method_display_name
 
 logger = logging.getLogger(__name__)
 
@@ -223,7 +223,8 @@ def _load_unsloth_model_and_tokenizer(
 
     logger.info(f"Loading model from {config.model_name_or_path} with Unsloth")
     try:
-        model, tokenizer = FastLanguageModel.from_pretrained(**load_kwargs)
+        with capture_stdout():
+            model, tokenizer = FastLanguageModel.from_pretrained(**load_kwargs)
     finally:
         if tokenizer_override_dir is not None:
             tokenizer_override_dir.cleanup()

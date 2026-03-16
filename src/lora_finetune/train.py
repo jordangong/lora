@@ -2,7 +2,6 @@
 
 import logging
 
-from rich.console import Console
 from rich.panel import Panel
 from rich.status import Status
 from rich.table import Table
@@ -33,14 +32,15 @@ from .trainer import (
     prepare_model_for_training,
 )
 from .utils import (
+    console,
     get_method_display_name,
+    get_warning_handler,
     print_model_size,
     set_seed,
     setup_logging,
     suppress_warnings,
 )
 
-console = Console()
 logger = logging.getLogger(__name__)
 
 
@@ -68,6 +68,9 @@ def run_benchmark_eval(model, model_name: str, eval_config: BenchmarkEvalConfig)
 
 def train_llm(config: Config) -> None:
     """Train a language model with LoRA."""
+    wh = get_warning_handler()
+    if wh is not None:
+        wh.start_buffering()
     with Status("[bold blue]Loading model...", console=console):
         model, tokenizer = load_model_and_tokenizer(
             config.model,
@@ -95,9 +98,13 @@ def train_llm(config: Config) -> None:
         )
 
         model = prepare_model_for_training(model, config.training, tokenizer)
+    if wh is not None:
+        wh.flush_buffered()
 
     print_model_size(model)
 
+    if wh is not None:
+        wh.start_buffering()
     with Status("[bold blue]Loading dataset...", console=console):
         dataset = load_text_dataset(config.data)
         use_trl_native_dataset = config.training.llm_trainer == "trl" and (
@@ -116,6 +123,9 @@ def train_llm(config: Config) -> None:
                 config.data,
                 shuffle_seed=config.training.data_seed,
             )
+
+    if wh is not None:
+        wh.flush_buffered()
 
     train_dataset = prepared_dataset[config.data.train_split]
     eval_dataset = None
@@ -177,10 +187,17 @@ def train_vision(config: Config) -> None:
     if config.training.remove_unused_columns:
         config.training.remove_unused_columns = False
 
+    wh = get_warning_handler()
+    if wh is not None:
+        wh.start_buffering()
     with Status("[bold blue]Loading dataset...", console=console):
         dataset = load_vision_dataset(config.data)
         num_labels = get_num_labels_from_dataset(dataset[config.data.train_split])
+    if wh is not None:
+        wh.flush_buffered()
 
+    if wh is not None:
+        wh.start_buffering()
     with Status("[bold blue]Loading model...", console=console):
         model, image_processor = load_model_and_tokenizer(config.model, num_labels=num_labels)
 
@@ -201,11 +218,17 @@ def train_vision(config: Config) -> None:
         )
 
         model = prepare_model_for_training(model, config.training)
+    if wh is not None:
+        wh.flush_buffered()
 
     print_model_size(model)
 
+    if wh is not None:
+        wh.start_buffering()
     with Status("[bold blue]Preprocessing dataset...", console=console):
         processed_dataset = preprocess_vision_dataset(dataset, image_processor, config.data)
+    if wh is not None:
+        wh.flush_buffered()
 
     train_dataset = processed_dataset[config.data.train_split]
     eval_dataset = None

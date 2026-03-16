@@ -1,5 +1,7 @@
 """Utility functions for LoRA finetuning."""
 
+import contextlib
+import io
 import logging
 import os
 import random
@@ -17,6 +19,38 @@ from rich.table import Table
 from rich.text import Text
 
 console = Console()
+
+_capture_logger = logging.getLogger(__name__ + ".captured_stdout")
+
+
+@contextlib.contextmanager
+def capture_stdout():
+    """Redirect stdout to capture print() output from third-party libraries.
+
+    Captured lines are logged at INFO level so they only appear with --verbose.
+    """
+    buf = io.StringIO()
+    old_stdout = sys.stdout
+    sys.stdout = buf
+    try:
+        yield buf
+    finally:
+        sys.stdout = old_stdout
+        text = buf.getvalue().strip()
+        if text:
+            for line in text.splitlines():
+                stripped = line.strip()
+                if stripped:
+                    _capture_logger.info(stripped)
+
+
+_warning_handler: Optional["RichWarningHandler"] = None
+
+
+def get_warning_handler() -> Optional["RichWarningHandler"]:
+    """Return the global RichWarningHandler installed by suppress_warnings()."""
+    return _warning_handler
+
 
 ANSI_ESCAPE_RE = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
 ORPHAN_SGR_RE = re.compile(r"\[(?:\d{1,3}(?:;\d{1,3})*)m")
@@ -61,6 +95,31 @@ WARNING_RULES = (
         contains_all=("Detected kernel version", "below the recommended minimum of"),
         logger_names=("accelerate",),
         replacement="Kernel version is below Accelerate's recommended minimum and may cause hangs",
+    ),
+    # Unsloth training stats banner — duplicates our Model Statistics panel
+    WarningRule(
+        contains_any=("2x faster free finetuning | Num GPUs",),
+        suppress=True,
+    ),
+    # Unsloth internal tokenizer detail — not actionable
+    WarningRule(
+        contains_any=("as a legacy tokenizer",),
+        suppress=True,
+    ),
+    # Transformers TP sharding detail — not actionable for LoRA users
+    WarningRule(
+        contains_any=("following layers were not sharded",),
+        suppress=True,
+    ),
+    # Unsloth fast download notice — already handled by progress bars
+    WarningRule(
+        contains_any=("Fast downloading is enabled",),
+        suppress=True,
+    ),
+    # warmup_ratio deprecation — we handle this at the source
+    WarningRule(
+        contains_any=("warmup_ratio is deprecated",),
+        suppress=True,
     ),
 )
 
@@ -168,6 +227,8 @@ class RichWarningHandler(logging.Handler):
         super().__init__()
         self._console = rich_console or console
         self._extra_rules = tuple(extra_rules)
+        self._buffering = False
+        self._buffer: list[str] = []
 
     def emit(self, record):
         msg = format_warning_message(
@@ -178,7 +239,21 @@ class RichWarningHandler(logging.Handler):
         if msg is None:
             return
 
-        _print_warning_message(msg, self._console)
+        if self._buffering:
+            self._buffer.append(msg)
+        else:
+            _print_warning_message(msg, self._console)
+
+    def start_buffering(self) -> None:
+        self._buffering = True
+
+    def flush_buffered(self, target_console: Optional[Console] = None) -> None:
+        self._buffering = False
+        msgs = self._buffer[:]
+        self._buffer.clear()
+        out = target_console or self._console
+        for msg in msgs:
+            _print_warning_message(msg, out)
 
 
 def configure_warning_loggers(
@@ -239,9 +314,19 @@ def suppress_warnings() -> None:
         pass
 
     # Replace transformers logger handlers with our Rich handler
+    global _warning_handler
     handler = RichWarningHandler()
+    _warning_handler = handler
     configure_warning_loggers(
-        ["transformers", "datasets", "accelerate", "huggingface_hub", "py.warnings"],
+        [
+            "transformers",
+            "datasets",
+            "accelerate",
+            "huggingface_hub",
+            "unsloth",
+            "unsloth_zoo",
+            "py.warnings",
+        ],
         handler,
     )
 

@@ -11,11 +11,13 @@ import torch
 from lora_finetune.utils import (
     RichWarningHandler,
     _normalize_warning_message,
+    capture_stdout,
     check_bitsandbytes_available,
     check_flash_attention_available,
     count_parameters,
     ensure_dir,
     find_all_linear_names,
+    format_warning_message,
     get_device,
     get_gpu_memory_usage,
     get_model_size,
@@ -337,3 +339,140 @@ class TestCheckAvailability:
         """Test bitsandbytes availability check."""
         result = check_bitsandbytes_available()
         assert isinstance(result, bool)
+
+
+class TestCaptureStdout:
+    """Tests for capture_stdout context manager."""
+
+    def test_captures_print_output(self):
+        """Test that print() inside capture_stdout is captured."""
+        with capture_stdout() as buf:
+            print("hello from unsloth")
+
+        assert "hello from unsloth" in buf.getvalue()
+
+    def test_restores_stdout(self, capsys):
+        """Test that stdout is restored after context exits."""
+        import sys
+
+        original = sys.stdout
+        with capture_stdout():
+            print("captured")
+        assert sys.stdout is original
+
+    def test_logs_captured_output_at_info(self, caplog):
+        """Test that captured output is logged at INFO level."""
+        with caplog.at_level(logging.INFO, logger="lora_finetune.utils.captured_stdout"):
+            with capture_stdout():
+                print("banner line 1")
+                print("banner line 2")
+
+        info_messages = [r.message for r in caplog.records if r.levelno == logging.INFO]
+        assert "banner line 1" in info_messages
+        assert "banner line 2" in info_messages
+
+    def test_empty_output_no_log(self, caplog):
+        """Test that empty output does not produce log records."""
+        with caplog.at_level(logging.INFO, logger="lora_finetune.utils.captured_stdout"):
+            with capture_stdout():
+                pass
+
+        assert len(caplog.records) == 0
+
+
+class TestRichWarningHandlerBuffering:
+    """Tests for RichWarningHandler buffering mode."""
+
+    def _make_handler_and_console(self):
+        class CaptureConsole:
+            def __init__(self):
+                self.messages = []
+
+            def print(self, message):
+                self.messages.append(message)
+
+        cap = CaptureConsole()
+        handler = RichWarningHandler(rich_console=cap)
+        return handler, cap
+
+    def _make_record(self, msg):
+        return logging.LogRecord(
+            name="transformers",
+            level=logging.WARNING,
+            pathname=__file__,
+            lineno=1,
+            msg=msg,
+            args=(),
+            exc_info=None,
+        )
+
+    def test_buffering_defers_output(self):
+        """Test that warnings are buffered and not printed immediately."""
+        handler, cap = self._make_handler_and_console()
+        handler.start_buffering()
+        handler.emit(self._make_record("deferred warning"))
+
+        assert len(cap.messages) == 0
+
+    def test_flush_prints_buffered(self):
+        """Test that flush_buffered prints all buffered warnings."""
+        handler, cap = self._make_handler_and_console()
+        handler.start_buffering()
+        handler.emit(self._make_record("warn 1"))
+        handler.emit(self._make_record("warn 2"))
+        handler.flush_buffered()
+
+        assert len(cap.messages) == 2
+
+    def test_flush_clears_buffer(self):
+        """Test that flush_buffered clears the buffer."""
+        handler, cap = self._make_handler_and_console()
+        handler.start_buffering()
+        handler.emit(self._make_record("warn"))
+        handler.flush_buffered()
+        handler.flush_buffered()  # second flush should be a no-op
+
+        assert len(cap.messages) == 1
+
+    def test_non_buffered_prints_immediately(self):
+        """Test that warnings print immediately when not buffering."""
+        handler, cap = self._make_handler_and_console()
+        handler.emit(self._make_record("immediate"))
+
+        assert len(cap.messages) == 1
+
+
+class TestNewWarningRules:
+    """Tests for Unsloth-specific warning rules."""
+
+    def test_suppresses_unsloth_training_stats(self):
+        result = format_warning_message(
+            "==((====))==  Unsloth - 2x faster free finetuning | Num GPUs used = 1"
+        )
+        assert result is None
+
+    def test_suppresses_legacy_tokenizer(self):
+        result = format_warning_message("Unsloth: Will load /tmp/foo as a legacy tokenizer.")
+        assert result is None
+
+    def test_suppresses_layers_not_sharded(self):
+        result = format_warning_message(
+            "The following layers were not sharded: model.layers.*.weight, lm_head.weight"
+        )
+        assert result is None
+
+    def test_suppresses_fast_downloading(self):
+        result = format_warning_message(
+            "Unsloth: Fast downloading is enabled - ignore downloading bars"
+        )
+        assert result is None
+
+    def test_suppresses_warmup_ratio_deprecation(self):
+        result = format_warning_message("warmup_ratio is deprecated and will be removed in v5.2")
+        assert result is None
+
+    def test_keeps_dropout_warning(self):
+        result = format_warning_message(
+            "Unsloth: Dropout = 0 is supported for fast patching. You are using dropout = 0.05."
+        )
+        assert result is not None
