@@ -201,9 +201,7 @@ def run_lighteval(
                     iterable, **kw
                 )
 
-            with warnings.catch_warnings():
-                warnings.filterwarnings("ignore", message=".*generation flags are not valid.*")
-                pipeline.evaluate()
+            pipeline.evaluate()
 
             results = pipeline.get_results()
         finally:

@@ -111,29 +111,6 @@ class TestSuppressWarnings:
             transformers_logger.setLevel(original_level)
             transformers_logger.propagate = original_propagate
 
-    def test_showwarning_filters_generation_flags_warning(self, monkeypatch):
-        """Ensure non-actionable generation warnings are suppressed."""
-        original_showwarning = warnings.showwarning
-        captured = []
-
-        try:
-            suppress_warnings()
-            monkeypatch.setattr(
-                "lora_finetune.utils.console.print",
-                lambda message: captured.append(message),
-            )
-
-            warnings.showwarning(
-                "generation flags are not valid for this model",
-                UserWarning,
-                "test_file.py",
-                1,
-            )
-
-            assert captured == []
-        finally:
-            warnings.showwarning = original_showwarning
-
     def test_normalize_warning_message_summarizes_load_report(self):
         """Ensure multiline load reports are summarized to a compact single line."""
         msg = (

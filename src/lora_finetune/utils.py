@@ -77,25 +77,6 @@ class WarningRule:
 
 
 WARNING_RULES = (
-    WarningRule(
-        contains_any=("not initialized from the model checkpoint",),
-        replacement="Some model weights were randomly initialized (expected for fine-tuning)",
-    ),
-    WarningRule(
-        contains_any=("Fast image processor", "slow image processor"),
-        replacement="Using standard image processor (fast processor available with use_fast=True)",
-    ),
-    WarningRule(contains_any=("You should probably TRAIN",), suppress=True),
-    WarningRule(contains_any=("generation flags are not valid",), suppress=True),
-    WarningRule(
-        contains_any=("unauthenticated requests to the HF Hub",),
-        replacement="HF Hub requests are unauthenticated; set HF_TOKEN for higher rate limits and faster downloads",
-    ),
-    WarningRule(
-        contains_all=("Detected kernel version", "below the recommended minimum of"),
-        logger_names=("accelerate",),
-        replacement="Kernel version is below Accelerate's recommended minimum and may cause hangs",
-    ),
     # Unsloth training stats banner — duplicates our Model Statistics panel
     WarningRule(
         contains_any=("2x faster free finetuning | Num GPUs",),
