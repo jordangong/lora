@@ -1,9 +1,12 @@
 """Tests for training entrypoints."""
 
-import lora_finetune.train as train_module
+import argparse
+
 from datasets import Dataset, DatasetDict
-from lora_finetune.config import Config, DataConfig, ModelConfig, TrainingConfig
 from torch import nn
+
+import lora_finetune.train as train_module
+from lora_finetune.config import Config, DataConfig, ModelConfig, TrainingConfig
 
 
 class TestTrainLlm:
@@ -58,15 +61,11 @@ class TestTrainLlm:
         preprocess_calls = []
         create_trainer_calls = []
 
-        def fake_prepare_text_dataset_for_trl(
-            raw_dataset, data_config, shuffle_seed=None
-        ):
+        def fake_prepare_text_dataset_for_trl(raw_dataset, data_config, shuffle_seed=None):
             prepare_calls.append((raw_dataset, data_config, shuffle_seed))
             return raw_dataset
 
-        def fake_preprocess_text_dataset(
-            raw_dataset, tokenizer, data_config, shuffle_seed=None
-        ):
+        def fake_preprocess_text_dataset(raw_dataset, tokenizer, data_config, shuffle_seed=None):
             preprocess_calls.append((raw_dataset, tokenizer, data_config, shuffle_seed))
             return raw_dataset
 
@@ -79,21 +78,13 @@ class TestTrainLlm:
             "load_model_and_tokenizer",
             lambda model_config, max_seq_length=None: (model, MockTokenizer()),
         )
-        monkeypatch.setattr(
-            train_module, "get_llm_target_modules", lambda model_name: ["q_proj"]
-        )
-        monkeypatch.setattr(
-            train_module, "get_peft_model_with_lora", lambda *args, **kwargs: model
-        )
+        monkeypatch.setattr(train_module, "get_llm_target_modules", lambda model_name: ["q_proj"])
+        monkeypatch.setattr(train_module, "get_peft_model_with_lora", lambda *args, **kwargs: model)
         monkeypatch.setattr(
             train_module, "prepare_model_for_training", lambda *args, **kwargs: model
         )
-        monkeypatch.setattr(
-            train_module, "print_model_size", lambda *args, **kwargs: None
-        )
-        monkeypatch.setattr(
-            train_module, "load_text_dataset", lambda data_config: dataset
-        )
+        monkeypatch.setattr(train_module, "print_model_size", lambda *args, **kwargs: None)
+        monkeypatch.setattr(train_module, "load_text_dataset", lambda data_config: dataset)
         monkeypatch.setattr(
             train_module,
             "prepare_text_dataset_for_trl",
@@ -164,9 +155,7 @@ class TestTrainLlm:
         )
         monkeypatch.setattr(train_module, "print_model_size", lambda *args, **kwargs: None)
         monkeypatch.setattr(train_module, "load_text_dataset", lambda data_config: dataset)
-        monkeypatch.setattr(
-            train_module, "get_text_collator", lambda tokenizer: "collator"
-        )
+        monkeypatch.setattr(train_module, "get_text_collator", lambda tokenizer: "collator")
         monkeypatch.setattr(
             train_module,
             "preprocess_text_dataset",
@@ -183,3 +172,83 @@ class TestTrainLlm:
         assert peft_calls[0]["random_state"] == 123
         assert peft_calls[0]["max_seq_length"] == 4096
 
+
+class TestMainBootstrap:
+    def test_main_bootstraps_unsloth_before_warning_setup(self, monkeypatch):
+        events = []
+        config = Config(
+            model=ModelConfig(model_type="causal_lm", use_unsloth=True),
+            training=TrainingConfig(output_dir="./test-output", eval_strategy="no"),
+        )
+
+        monkeypatch.setattr(train_module, "parse_args", lambda: argparse.Namespace(verbose=False))
+        monkeypatch.setattr(train_module, "build_config", lambda args: config)
+        monkeypatch.setattr(
+            "lora_finetune._optional_unsloth.ensure_unsloth_imported",
+            lambda: events.append("bootstrap"),
+        )
+        monkeypatch.setattr(train_module, "suppress_warnings", lambda: events.append("suppress"))
+
+        def fake_ensure_runtime_imports():
+            events.append("runtime_imports")
+            train_module.hf_set_seed = lambda seed: events.append(f"hf_set_seed:{seed}")
+
+        monkeypatch.setattr(train_module, "_ensure_runtime_imports", fake_ensure_runtime_imports)
+        monkeypatch.setattr(
+            train_module, "setup_logging", lambda level: events.append(f"logging:{level}")
+        )
+        monkeypatch.setattr(train_module, "set_seed", lambda seed: events.append(f"seed:{seed}"))
+        monkeypatch.setattr(train_module, "train_llm", lambda cfg: events.append("train_llm"))
+        monkeypatch.setattr(
+            train_module.console,
+            "print",
+            lambda *args, **kwargs: events.append("print_config"),
+        )
+
+        train_module.main()
+
+        assert events[:5] == [
+            "bootstrap",
+            "suppress",
+            "runtime_imports",
+            "logging:WARNING",
+            f"seed:{config.training.seed}",
+        ]
+        assert f"hf_set_seed:{config.training.seed}" in events
+        assert "train_llm" in events
+
+    def test_main_skips_unsloth_bootstrap_when_disabled(self, monkeypatch):
+        events = []
+        config = Config(
+            model=ModelConfig(model_type="causal_lm", use_unsloth=False),
+            training=TrainingConfig(output_dir="./test-output", eval_strategy="no"),
+        )
+
+        monkeypatch.setattr(train_module, "parse_args", lambda: argparse.Namespace(verbose=True))
+        monkeypatch.setattr(train_module, "build_config", lambda args: config)
+        monkeypatch.setattr(
+            "lora_finetune._optional_unsloth.ensure_unsloth_imported",
+            lambda: events.append("bootstrap"),
+        )
+        monkeypatch.setattr(train_module, "suppress_warnings", lambda: events.append("suppress"))
+
+        def fake_ensure_runtime_imports():
+            events.append("runtime_imports")
+            train_module.hf_set_seed = lambda seed: events.append(f"hf_set_seed:{seed}")
+
+        monkeypatch.setattr(train_module, "_ensure_runtime_imports", fake_ensure_runtime_imports)
+        monkeypatch.setattr(
+            train_module, "setup_logging", lambda level: events.append(f"logging:{level}")
+        )
+        monkeypatch.setattr(train_module, "set_seed", lambda seed: events.append(f"seed:{seed}"))
+        monkeypatch.setattr(train_module, "train_llm", lambda cfg: events.append("train_llm"))
+        monkeypatch.setattr(
+            train_module.console,
+            "print",
+            lambda *args, **kwargs: events.append("print_config"),
+        )
+
+        train_module.main()
+
+        assert "bootstrap" not in events
+        assert events[:3] == ["suppress", "runtime_imports", "logging:INFO"]

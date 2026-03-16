@@ -136,7 +136,7 @@ class TestGetTrainingArguments:
         assert isinstance(training_args, FakeSFTConfig)
         assert training_args.dataset_kwargs == {"skip_prepare_dataset": True}
         assert training_args.packing is False
-        assert training_args.padding_free is False
+        assert training_args.padding_free is None
         assert training_args.eval_packing is False
         assert training_args.dataset_text_field == "text"
 

@@ -27,11 +27,14 @@ from transformers import (
     PreTrainedModel,
 )
 
-from .._optional_unsloth import FastLanguageModel
+from .. import _optional_unsloth
 from ..config import LoraConfig, ModelConfig
 from ..utils import capture_stdout, get_method_display_name
 
 logger = logging.getLogger(__name__)
+
+_FAST_LANGUAGE_MODEL_UNSET = object()
+FastLanguageModel = _FAST_LANGUAGE_MODEL_UNSET
 
 
 MODEL_TYPE_TO_AUTO_CLASS = {
@@ -47,6 +50,13 @@ MODEL_TYPE_TO_TASK_TYPE = {
 }
 
 UNSLOTH_SUPPORTED_METHODS = {"lora", "dora", "loraplus", "full"}
+
+
+def _get_fast_language_model():
+    fast_language_model = FastLanguageModel
+    if fast_language_model is not _FAST_LANGUAGE_MODEL_UNSET:
+        return fast_language_model
+    return _optional_unsloth.FastLanguageModel
 
 
 def get_torch_dtype(dtype_str: str) -> torch.dtype:
@@ -184,7 +194,8 @@ def _load_unsloth_model_and_tokenizer(
     max_seq_length: Optional[int] = None,
 ) -> Tuple[PreTrainedModel, Any]:
     """Load a causal LM through Unsloth when enabled."""
-    if FastLanguageModel is None:
+    fast_language_model = _get_fast_language_model()
+    if fast_language_model is None:
         raise ImportError(
             "Unsloth is not installed. Install it with: pip install unsloth "
             "or uv sync --extra unsloth"
@@ -219,12 +230,12 @@ def _load_unsloth_model_and_tokenizer(
     } | {
         key: value for key, value in load_kwargs.items() if key in {"load_in_4bit", "load_in_8bit"}
     }
-    load_kwargs = _filter_supported_kwargs(FastLanguageModel.from_pretrained, load_kwargs)
+    load_kwargs = _filter_supported_kwargs(fast_language_model.from_pretrained, load_kwargs)
 
     logger.info(f"Loading model from {config.model_name_or_path} with Unsloth")
     try:
         with capture_stdout():
-            model, tokenizer = FastLanguageModel.from_pretrained(**load_kwargs)
+            model, tokenizer = fast_language_model.from_pretrained(**load_kwargs)
     finally:
         if tokenizer_override_dir is not None:
             tokenizer_override_dir.cleanup()
@@ -253,7 +264,8 @@ def _apply_unsloth_peft_model(
     max_seq_length: Optional[int] = None,
 ) -> Union[PreTrainedModel, PeftModel]:
     """Apply Unsloth LoRA patching when supported by the current config."""
-    if FastLanguageModel is None:
+    fast_language_model = _get_fast_language_model()
+    if fast_language_model is None:
         raise ImportError(
             "Unsloth is not installed. Install it with: pip install unsloth "
             "or uv sync --extra unsloth"
@@ -282,12 +294,12 @@ def _apply_unsloth_peft_model(
         "modules_to_save": lora_config.modules_to_save,
     }
     unsloth_kwargs = {key: value for key, value in unsloth_kwargs.items() if value is not None}
-    unsloth_kwargs = _filter_supported_kwargs(FastLanguageModel.get_peft_model, unsloth_kwargs)
+    unsloth_kwargs = _filter_supported_kwargs(fast_language_model.get_peft_model, unsloth_kwargs)
 
     logger.info(
         f"Applying {get_method_display_name(method)} with Unsloth: r={lora_config.r}, alpha={lora_config.alpha}"
     )
-    model = FastLanguageModel.get_peft_model(model, **unsloth_kwargs)
+    model = fast_language_model.get_peft_model(model, **unsloth_kwargs)
     setattr(
         model,
         "_lora_finetune_unsloth_managed_gradient_checkpointing",

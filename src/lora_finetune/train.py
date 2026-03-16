@@ -5,32 +5,9 @@ import logging
 from rich.panel import Panel
 from rich.status import Status
 from rich.table import Table
-from transformers import set_seed as hf_set_seed
 
 from .cli import build_config, parse_args
 from .config import BenchmarkEvalConfig, Config
-from .data.text_data import (
-    get_text_collator,
-    load_text_dataset,
-    prepare_text_dataset_for_trl,
-    preprocess_text_dataset,
-    requires_trl_native_dataset,
-)
-from .data.vision_data import (
-    get_vision_collator,
-    load_vision_dataset,
-    preprocess_vision_dataset,
-)
-from .evaluators import LightEvalCallback, run_lighteval
-from .models.base import get_peft_model_with_lora, load_model_and_tokenizer
-from .models.llm import get_llm_target_modules
-from .models.vision import get_num_labels_from_dataset, get_vision_target_modules
-from .trainer import (
-    compute_metrics_for_classification,
-    compute_metrics_for_lm,
-    create_trainer,
-    prepare_model_for_training,
-)
 from .utils import (
     console,
     get_method_display_name,
@@ -43,9 +20,181 @@ from .utils import (
 
 logger = logging.getLogger(__name__)
 
+hf_set_seed = None
+get_text_collator = None
+load_text_dataset = None
+prepare_text_dataset_for_trl = None
+preprocess_text_dataset = None
+requires_trl_native_dataset = None
+get_vision_collator = None
+load_vision_dataset = None
+preprocess_vision_dataset = None
+LightEvalCallback = None
+run_lighteval = None
+get_peft_model_with_lora = None
+load_model_and_tokenizer = None
+get_llm_target_modules = None
+get_num_labels_from_dataset = None
+get_vision_target_modules = None
+compute_metrics_for_classification = None
+compute_metrics_for_lm = None
+create_trainer = None
+prepare_model_for_training = None
+
+
+def _ensure_runtime_imports():
+    global hf_set_seed
+    global get_text_collator, load_text_dataset, prepare_text_dataset_for_trl
+    global preprocess_text_dataset, requires_trl_native_dataset
+    global get_vision_collator, load_vision_dataset, preprocess_vision_dataset
+    global LightEvalCallback, run_lighteval
+    global get_peft_model_with_lora, load_model_and_tokenizer
+    global get_llm_target_modules, get_num_labels_from_dataset, get_vision_target_modules
+    global compute_metrics_for_classification, compute_metrics_for_lm
+    global create_trainer, prepare_model_for_training
+
+    if hf_set_seed is None:
+        from transformers import set_seed as imported_hf_set_seed
+
+        hf_set_seed = imported_hf_set_seed
+
+    if any(
+        value is None
+        for value in (
+            get_text_collator,
+            load_text_dataset,
+            prepare_text_dataset_for_trl,
+            preprocess_text_dataset,
+            requires_trl_native_dataset,
+        )
+    ):
+        from .data.text_data import (
+            get_text_collator as imported_get_text_collator,
+        )
+        from .data.text_data import (
+            load_text_dataset as imported_load_text_dataset,
+        )
+        from .data.text_data import (
+            prepare_text_dataset_for_trl as imported_prepare_text_dataset_for_trl,
+        )
+        from .data.text_data import (
+            preprocess_text_dataset as imported_preprocess_text_dataset,
+        )
+        from .data.text_data import (
+            requires_trl_native_dataset as imported_requires_trl_native_dataset,
+        )
+
+        if get_text_collator is None:
+            get_text_collator = imported_get_text_collator
+        if load_text_dataset is None:
+            load_text_dataset = imported_load_text_dataset
+        if prepare_text_dataset_for_trl is None:
+            prepare_text_dataset_for_trl = imported_prepare_text_dataset_for_trl
+        if preprocess_text_dataset is None:
+            preprocess_text_dataset = imported_preprocess_text_dataset
+        if requires_trl_native_dataset is None:
+            requires_trl_native_dataset = imported_requires_trl_native_dataset
+
+    if any(
+        value is None
+        for value in (get_vision_collator, load_vision_dataset, preprocess_vision_dataset)
+    ):
+        from .data.vision_data import (
+            get_vision_collator as imported_get_vision_collator,
+        )
+        from .data.vision_data import (
+            load_vision_dataset as imported_load_vision_dataset,
+        )
+        from .data.vision_data import (
+            preprocess_vision_dataset as imported_preprocess_vision_dataset,
+        )
+
+        if get_vision_collator is None:
+            get_vision_collator = imported_get_vision_collator
+        if load_vision_dataset is None:
+            load_vision_dataset = imported_load_vision_dataset
+        if preprocess_vision_dataset is None:
+            preprocess_vision_dataset = imported_preprocess_vision_dataset
+
+    if LightEvalCallback is None or run_lighteval is None:
+        from .evaluators import (
+            LightEvalCallback as imported_LightEvalCallback,
+        )
+        from .evaluators import (
+            run_lighteval as imported_run_lighteval,
+        )
+
+        if LightEvalCallback is None:
+            LightEvalCallback = imported_LightEvalCallback
+        if run_lighteval is None:
+            run_lighteval = imported_run_lighteval
+
+    if get_peft_model_with_lora is None or load_model_and_tokenizer is None:
+        from .models.base import (
+            get_peft_model_with_lora as imported_get_peft_model_with_lora,
+        )
+        from .models.base import (
+            load_model_and_tokenizer as imported_load_model_and_tokenizer,
+        )
+
+        if get_peft_model_with_lora is None:
+            get_peft_model_with_lora = imported_get_peft_model_with_lora
+        if load_model_and_tokenizer is None:
+            load_model_and_tokenizer = imported_load_model_and_tokenizer
+
+    if get_llm_target_modules is None:
+        from .models.llm import get_llm_target_modules as imported_get_llm_target_modules
+
+        get_llm_target_modules = imported_get_llm_target_modules
+
+    if get_num_labels_from_dataset is None or get_vision_target_modules is None:
+        from .models.vision import (
+            get_num_labels_from_dataset as imported_get_num_labels_from_dataset,
+        )
+        from .models.vision import (
+            get_vision_target_modules as imported_get_vision_target_modules,
+        )
+
+        if get_num_labels_from_dataset is None:
+            get_num_labels_from_dataset = imported_get_num_labels_from_dataset
+        if get_vision_target_modules is None:
+            get_vision_target_modules = imported_get_vision_target_modules
+
+    if any(
+        value is None
+        for value in (
+            compute_metrics_for_classification,
+            compute_metrics_for_lm,
+            create_trainer,
+            prepare_model_for_training,
+        )
+    ):
+        from .trainer import (
+            compute_metrics_for_classification as imported_compute_metrics_for_classification,
+        )
+        from .trainer import (
+            compute_metrics_for_lm as imported_compute_metrics_for_lm,
+        )
+        from .trainer import (
+            create_trainer as imported_create_trainer,
+        )
+        from .trainer import (
+            prepare_model_for_training as imported_prepare_model_for_training,
+        )
+
+        if compute_metrics_for_classification is None:
+            compute_metrics_for_classification = imported_compute_metrics_for_classification
+        if compute_metrics_for_lm is None:
+            compute_metrics_for_lm = imported_compute_metrics_for_lm
+        if create_trainer is None:
+            create_trainer = imported_create_trainer
+        if prepare_model_for_training is None:
+            prepare_model_for_training = imported_prepare_model_for_training
+
 
 def run_benchmark_eval(model, model_name: str, eval_config: BenchmarkEvalConfig) -> None:
     """Run benchmark evaluation after training using lighteval."""
+    _ensure_runtime_imports()
     console.print(Panel("[bold blue]Running Benchmark Evaluation[/bold blue]"))
 
     metrics = run_lighteval(
@@ -68,6 +217,7 @@ def run_benchmark_eval(model, model_name: str, eval_config: BenchmarkEvalConfig)
 
 def train_llm(config: Config) -> None:
     """Train a language model with LoRA."""
+    _ensure_runtime_imports()
     wh = get_warning_handler()
     if wh is not None:
         wh.start_buffering()
@@ -183,6 +333,7 @@ def train_llm(config: Config) -> None:
 
 def train_vision(config: Config) -> None:
     """Train a vision model with LoRA."""
+    _ensure_runtime_imports()
     # Vision training uses set_transform which needs the original image column
     if config.training.remove_unused_columns:
         config.training.remove_unused_columns = False
@@ -264,10 +415,16 @@ def train_vision(config: Config) -> None:
 
 def main() -> None:
     """Main entry point."""
-    suppress_warnings()
-
     args = parse_args()
     config = build_config(args)
+
+    if config.model.use_unsloth:
+        from ._optional_unsloth import ensure_unsloth_imported
+
+        ensure_unsloth_imported()
+
+    suppress_warnings()
+    _ensure_runtime_imports()
 
     setup_logging(level="INFO" if args.verbose else "WARNING")
     set_seed(config.training.seed)

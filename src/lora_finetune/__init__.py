@@ -2,7 +2,6 @@
 
 __version__ = "0.1.0"
 
-from . import _optional_unsloth
 from .config import (
     AugmentationConfig,
     DataConfig,
@@ -12,7 +11,6 @@ from .config import (
 )
 
 __all__ = [
-    "_optional_unsloth",
     "AugmentationConfig",
     "DataConfig",
     "LoraConfig",
