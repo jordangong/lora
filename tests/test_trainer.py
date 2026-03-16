@@ -123,6 +123,7 @@ class TestGetTrainingArguments:
                 self.dataset_kwargs = None
                 self.dataset_text_field = None
                 self.packing = True
+                self.padding_free = None
                 self.eval_packing = None
 
         original_sft_config = trainer_module.SFTConfig
@@ -135,8 +136,41 @@ class TestGetTrainingArguments:
         assert isinstance(training_args, FakeSFTConfig)
         assert training_args.dataset_kwargs == {"skip_prepare_dataset": True}
         assert training_args.packing is False
+        assert training_args.padding_free is False
         assert training_args.eval_packing is False
         assert training_args.dataset_text_field == "text"
+
+    def test_get_sft_training_arguments_preserves_padding_free_for_unsloth(self, monkeypatch):
+        """Test that the Unsloth path leaves TRL padding_free unset for Unsloth to manage."""
+        training_config = TrainingConfig(
+            output_dir="./test-output",
+            eval_strategy="no",
+            load_best_model_at_end=False,
+            report_to="none",
+            llm_trainer="trl",
+        )
+        model_config = ModelConfig(model_type="causal_lm", use_unsloth=True)
+
+        class FakeSFTConfig:
+            def __init__(self, **kwargs):
+                for key, value in kwargs.items():
+                    setattr(self, key, value)
+                self.dataset_kwargs = None
+                self.dataset_text_field = None
+                self.packing = True
+                self.padding_free = None
+                self.eval_packing = None
+
+        original_sft_config = trainer_module.SFTConfig
+        try:
+            monkeypatch.setattr(trainer_module, "SFTConfig", FakeSFTConfig)
+            training_args = get_sft_training_arguments(training_config, model_config)
+        finally:
+            monkeypatch.setattr(trainer_module, "SFTConfig", original_sft_config)
+
+        assert isinstance(training_args, FakeSFTConfig)
+        assert training_args.packing is False
+        assert training_args.padding_free is None
 
     def test_get_sft_training_arguments_maps_data_config_fields(self, monkeypatch):
         """Test that SFT args reuse compatible TRL-native data settings."""

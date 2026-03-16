@@ -357,6 +357,8 @@ def get_sft_training_arguments(
 
     if hasattr(training_args, "packing"):
         training_args.packing = False
+    if hasattr(training_args, "padding_free") and not model_config.use_unsloth:
+        training_args.padding_free = False
     if hasattr(training_args, "eval_packing") and training_args.eval_packing is None:
         training_args.eval_packing = False
     if data_config is not None:
