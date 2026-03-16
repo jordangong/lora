@@ -334,6 +334,7 @@ def setup_logging(level: str = "WARNING") -> logging.Logger:
         datefmt="%Y-%m-%d %H:%M:%S",
         handlers=[logging.StreamHandler(sys.stdout)],
         level=getattr(logging, level.upper()),
+        force=True,
     )
 
     # Suppress verbose transformers/datasets logs

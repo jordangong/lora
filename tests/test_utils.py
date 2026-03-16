@@ -71,6 +71,24 @@ class TestSetupLogging:
         logger = setup_logging(level="WARNING")
         assert logger is not None
 
+    def test_setup_logging_reconfigures_preexisting_root_handlers(self):
+        """Test that setup_logging overrides an already-configured root logger."""
+        root_logger = logging.getLogger()
+        original_handlers = root_logger.handlers[:]
+        original_level = root_logger.level
+
+        try:
+            root_logger.handlers = [logging.StreamHandler()]
+            root_logger.setLevel(logging.ERROR)
+
+            setup_logging(level="INFO")
+
+            assert root_logger.level == logging.INFO
+            assert logging.getLogger("lora_finetune.test").getEffectiveLevel() == logging.INFO
+        finally:
+            root_logger.handlers = original_handlers
+            root_logger.setLevel(original_level)
+
 
 class TestSuppressWarnings:
     """Tests for suppress_warnings function."""
