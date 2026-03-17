@@ -11,9 +11,11 @@ from lora_finetune.data.text_data import (
     CHAT_TEMPLATE,
     DEFAULT_PROMPT_TEMPLATE,
     format_instruction,
+    get_text_classification_collator,
     get_text_collator,
     load_text_dataset,
     prepare_text_dataset_for_trl,
+    preprocess_text_classification_dataset,
     preprocess_text_dataset,
     requires_trl_native_dataset,
     tokenize_function,
@@ -220,6 +222,41 @@ class TestGetTextCollator:
         collator = get_text_collator(tokenizer, mlm=True)
 
         assert collator.mlm is True
+
+    def test_get_text_classification_collator(self):
+        class MockTokenizer:
+            pad_token_id = 0
+            padding_side = "right"
+
+            def pad(
+                self,
+                features,
+                padding=True,
+                max_length=None,
+                pad_to_multiple_of=None,
+                return_tensors=None,
+            ):
+                max_len = max(len(feature["input_ids"]) for feature in features)
+                batch = {
+                    "input_ids": [],
+                    "attention_mask": [],
+                    "label": [feature["label"] for feature in features],
+                }
+                for feature in features:
+                    pad_len = max_len - len(feature["input_ids"])
+                    batch["input_ids"].append(feature["input_ids"] + [self.pad_token_id] * pad_len)
+                    batch["attention_mask"].append(feature["attention_mask"] + [0] * pad_len)
+                return batch
+
+        collator = get_text_classification_collator(MockTokenizer())
+        batch = collator(
+            [
+                {"input_ids": [1, 2], "attention_mask": [1, 1], "label": 0},
+                {"input_ids": [3], "attention_mask": [1], "label": 1},
+            ]
+        )
+
+        assert batch["labels"] == [0, 1]
 
 
 class TestExtractNormalizationFromProcessor:
@@ -794,6 +831,115 @@ class TestPreprocessTextDataset:
         actual_ids = [row[0] for row in tokenized["train"]["input_ids"]]
 
         assert actual_ids == [0, 1, 2, 3, 4]
+
+    def test_preprocess_text_classification_dataset_uses_custom_columns(self):
+        class MockTokenizer:
+            def __call__(self, texts, truncation, max_length, padding, return_tensors):
+                return {
+                    "input_ids": [[idx + 1] for idx, _ in enumerate(texts)],
+                    "attention_mask": [[1] for _ in texts],
+                }
+
+        dataset = DatasetDict(
+            {
+                "train": Dataset.from_dict(
+                    {
+                        "sentence": ["good", "bad"],
+                        "sentiment": ["positive", "negative"],
+                    }
+                ),
+                "validation": Dataset.from_dict(
+                    {
+                        "sentence": ["ok"],
+                        "sentiment": ["positive"],
+                    }
+                ),
+            }
+        )
+        config = DataConfig(
+            text_column="sentence",
+            label_column="sentiment",
+            preprocessing_num_workers=1,
+        )
+
+        tokenized = preprocess_text_classification_dataset(dataset, MockTokenizer(), config)
+
+        assert tokenized["train"].column_names == ["input_ids", "attention_mask", "label"]
+        assert sorted(set(tokenized["train"]["label"])) == [0, 1]
+        assert tokenized["validation"]["label"][0] in {0, 1}
+
+    def test_preprocess_text_classification_dataset_shuffles_before_sampling(self):
+        class MockTokenizer:
+            def __call__(self, texts, truncation, max_length, padding, return_tensors):
+                ids = [int(text.split("-")[-1]) for text in texts]
+                return {
+                    "input_ids": [[value] for value in ids],
+                    "attention_mask": [[1] for _ in ids],
+                }
+
+        dataset = DatasetDict(
+            {
+                "train": Dataset.from_dict(
+                    {
+                        "text": [f"sample-{idx}" for idx in range(10)],
+                        "label": [idx % 2 for idx in range(10)],
+                    }
+                )
+            }
+        )
+        config = DataConfig(
+            text_column="text",
+            label_column="label",
+            preprocessing_num_workers=1,
+            max_train_samples=4,
+        )
+
+        tokenized = preprocess_text_classification_dataset(
+            dataset,
+            MockTokenizer(),
+            config,
+            shuffle_seed=123,
+        )
+
+        expected_order = dataset["train"].shuffle(seed=123).select(range(4))["text"]
+        expected_ids = [int(text.split("-")[-1]) for text in expected_order]
+        actual_ids = [row[0] for row in tokenized["train"]["input_ids"]]
+        assert actual_ids == expected_ids
+
+    def test_preprocess_text_classification_dataset_remaps_sparse_integer_labels(self):
+        class MockTokenizer:
+            def __call__(self, texts, truncation, max_length, padding, return_tensors):
+                return {
+                    "input_ids": [[idx + 1] for idx, _ in enumerate(texts)],
+                    "attention_mask": [[1] for _ in texts],
+                }
+
+        dataset = DatasetDict(
+            {
+                "train": Dataset.from_dict(
+                    {
+                        "text": ["good", "bad", "ok"],
+                        "label": [10, 20, 10],
+                    }
+                ),
+                "validation": Dataset.from_dict(
+                    {
+                        "text": ["maybe"],
+                        "label": [20],
+                    }
+                ),
+            }
+        )
+        config = DataConfig(
+            text_column="text",
+            label_column="label",
+            preprocessing_num_workers=1,
+        )
+
+        tokenized = preprocess_text_classification_dataset(dataset, MockTokenizer(), config)
+
+        assert sorted(set(tokenized["train"]["label"])) == [0, 1]
+        assert tokenized["validation"]["label"] == [1]
 
 
 class TestPrepareTextDatasetForTrl:

@@ -22,6 +22,7 @@ from transformers import (
     AutoModelForCausalLM,
     AutoModelForImageClassification,
     AutoModelForSeq2SeqLM,
+    AutoModelForSequenceClassification,
     AutoTokenizer,
     BitsAndBytesConfig,
     PreTrainedModel,
@@ -41,12 +42,14 @@ MODEL_TYPE_TO_AUTO_CLASS = {
     "causal_lm": AutoModelForCausalLM,
     "seq2seq": AutoModelForSeq2SeqLM,
     "vision": AutoModelForImageClassification,
+    "text_classification": AutoModelForSequenceClassification,
 }
 
 MODEL_TYPE_TO_TASK_TYPE = {
     "causal_lm": TaskType.CAUSAL_LM,
     "seq2seq": TaskType.SEQ_2_SEQ_LM,
     "vision": TaskType.FEATURE_EXTRACTION,
+    "text_classification": TaskType.SEQ_CLS,
 }
 
 UNSLOTH_SUPPORTED_METHODS = {"lora", "dora", "loraplus", "full"}
@@ -313,11 +316,18 @@ def load_model_and_tokenizer(
     num_labels: Optional[int] = None,
     *,
     max_seq_length: Optional[int] = None,
+    id2label: Optional[dict[int, str]] = None,
+    label2id: Optional[dict[str, int]] = None,
 ) -> Tuple[PreTrainedModel, Any]:
     """Load model and tokenizer/processor based on model type."""
     if config.use_unsloth:
-        if num_labels is not None:
-            raise ValueError("Unsloth integration is not supported for vision models")
+        if (
+            config.model_type != "causal_lm"
+            or num_labels is not None
+            or id2label is not None
+            or label2id is not None
+        ):
+            raise ValueError("Unsloth integration is only supported for causal_lm models")
         return _load_unsloth_model_and_tokenizer(config, max_seq_length=max_seq_length)
 
     model_kwargs = {
@@ -339,9 +349,13 @@ def load_model_and_tokenizer(
 
     auto_class = MODEL_TYPE_TO_AUTO_CLASS[config.model_type]
 
-    if config.model_type == "vision" and num_labels:
+    if config.model_type in {"vision", "text_classification"} and num_labels is not None:
         model_kwargs["num_labels"] = num_labels
         model_kwargs["ignore_mismatched_sizes"] = True
+        if id2label:
+            model_kwargs["id2label"] = id2label
+        if label2id:
+            model_kwargs["label2id"] = label2id
 
     logger.info(f"Loading model from {config.model_name_or_path}")
     model = auto_class.from_pretrained(

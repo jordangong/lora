@@ -318,21 +318,13 @@ class TestBuildConfig:
             setattr(args, field, None)
 
         # Add minimal args for other configs
-        args.__dict__.update(
-            {k: None for k in vars(DataConfig()).keys() if not k.startswith("_")}
-        )
+        args.__dict__.update({k: None for k in vars(DataConfig()).keys() if not k.startswith("_")})
         args.__dict__.update(
             {k: None for k in vars(TrainingConfig()).keys() if not k.startswith("_")}
         )
+        args.__dict__.update({k: None for k in vars(ModelConfig()).keys() if not k.startswith("_")})
         args.__dict__.update(
-            {k: None for k in vars(ModelConfig()).keys() if not k.startswith("_")}
-        )
-        args.__dict__.update(
-            {
-                f"aug_{k}": None
-                for k in vars(AugmentationConfig()).keys()
-                if not k.startswith("_")
-            }
+            {f"aug_{k}": None for k in vars(AugmentationConfig()).keys() if not k.startswith("_")}
         )
         args.__dict__.update(
             {
@@ -342,25 +334,13 @@ class TestBuildConfig:
             }
         )
         args.__dict__.update(
-            {
-                f"no_{k}": None
-                for k in vars(TrainingConfig()).keys()
-                if not k.startswith("_")
-            }
+            {f"no_{k}": None for k in vars(TrainingConfig()).keys() if not k.startswith("_")}
         )
         args.__dict__.update(
-            {
-                f"no_{k}": None
-                for k in vars(ModelConfig()).keys()
-                if not k.startswith("_")
-            }
+            {f"no_{k}": None for k in vars(ModelConfig()).keys() if not k.startswith("_")}
         )
         args.__dict__.update(
-            {
-                f"no_{k}": None
-                for k in vars(DataConfig()).keys()
-                if not k.startswith("_")
-            }
+            {f"no_{k}": None for k in vars(DataConfig()).keys() if not k.startswith("_")}
         )
 
         config = build_config(args)
@@ -386,52 +366,28 @@ class TestBuildConfig:
             args = argparse.Namespace(config=temp_path)
             # Add all expected args as None
             args.__dict__.update(
-                {
-                    f"lora_{k}": None
-                    for k in vars(LoraConfig()).keys()
-                    if not k.startswith("_")
-                }
+                {f"lora_{k}": None for k in vars(LoraConfig()).keys() if not k.startswith("_")}
             )
             args.__dict__.update(
-                {
-                    f"no_lora_{k}": None
-                    for k in vars(LoraConfig()).keys()
-                    if not k.startswith("_")
-                }
+                {f"no_lora_{k}": None for k in vars(LoraConfig()).keys() if not k.startswith("_")}
             )
             args.__dict__.update(
                 {k: None for k in vars(ModelConfig()).keys() if not k.startswith("_")}
             )
             args.__dict__.update(
-                {
-                    f"no_{k}": None
-                    for k in vars(ModelConfig()).keys()
-                    if not k.startswith("_")
-                }
+                {f"no_{k}": None for k in vars(ModelConfig()).keys() if not k.startswith("_")}
             )
             args.__dict__.update(
                 {k: None for k in vars(DataConfig()).keys() if not k.startswith("_")}
             )
             args.__dict__.update(
-                {
-                    f"no_{k}": None
-                    for k in vars(DataConfig()).keys()
-                    if not k.startswith("_")
-                }
+                {f"no_{k}": None for k in vars(DataConfig()).keys() if not k.startswith("_")}
             )
             args.__dict__.update(
-                {
-                    k: None
-                    for k in vars(TrainingConfig()).keys()
-                    if not k.startswith("_")
-                }
+                {k: None for k in vars(TrainingConfig()).keys() if not k.startswith("_")}
             )
             args.__dict__.update(
-                {
-                    f"no_{k}": None
-                    for k in vars(TrainingConfig()).keys()
-                    if not k.startswith("_")
-                }
+                {f"no_{k}": None for k in vars(TrainingConfig()).keys() if not k.startswith("_")}
             )
             args.__dict__.update(
                 {
@@ -487,11 +443,7 @@ class TestBuildConfig:
                 }
             )
             args.__dict__.update(
-                {
-                    f"no_lora_{k}": None
-                    for k in vars(LoraConfig()).keys()
-                    if not k.startswith("_")
-                }
+                {f"no_lora_{k}": None for k in vars(LoraConfig()).keys() if not k.startswith("_")}
             )
             args.__dict__.update(
                 {
@@ -501,21 +453,13 @@ class TestBuildConfig:
                 }
             )
             args.__dict__.update(
-                {
-                    f"no_{k}": None
-                    for k in vars(ModelConfig()).keys()
-                    if not k.startswith("_")
-                }
+                {f"no_{k}": None for k in vars(ModelConfig()).keys() if not k.startswith("_")}
             )
             args.__dict__.update(
                 {k: None for k in vars(DataConfig()).keys() if not k.startswith("_")}
             )
             args.__dict__.update(
-                {
-                    f"no_{k}": None
-                    for k in vars(DataConfig()).keys()
-                    if not k.startswith("_")
-                }
+                {f"no_{k}": None for k in vars(DataConfig()).keys() if not k.startswith("_")}
             )
             args.__dict__.update(
                 {
@@ -525,11 +469,7 @@ class TestBuildConfig:
                 }
             )
             args.__dict__.update(
-                {
-                    f"no_{k}": None
-                    for k in vars(TrainingConfig()).keys()
-                    if not k.startswith("_")
-                }
+                {f"no_{k}": None for k in vars(TrainingConfig()).keys() if not k.startswith("_")}
             )
             args.__dict__.update(
                 {

@@ -22,9 +22,11 @@ logger = logging.getLogger(__name__)
 
 hf_set_seed = None
 get_text_collator = None
+get_text_classification_collator = None
 load_text_dataset = None
 prepare_text_dataset_for_trl = None
 preprocess_text_dataset = None
+preprocess_text_classification_dataset = None
 requires_trl_native_dataset = None
 get_vision_collator = None
 load_vision_dataset = None
@@ -34,7 +36,10 @@ run_lighteval = None
 get_peft_model_with_lora = None
 load_model_and_tokenizer = None
 get_llm_target_modules = None
+get_text_target_modules = None
 get_num_labels_from_dataset = None
+get_id2label = None
+get_label2id = None
 get_vision_target_modules = None
 compute_metrics_for_classification = None
 compute_metrics_for_lm = None
@@ -44,12 +49,15 @@ prepare_model_for_training = None
 
 def _ensure_runtime_imports():
     global hf_set_seed
-    global get_text_collator, load_text_dataset, prepare_text_dataset_for_trl
-    global preprocess_text_dataset, requires_trl_native_dataset
+    global get_text_collator, get_text_classification_collator
+    global load_text_dataset, prepare_text_dataset_for_trl
+    global preprocess_text_dataset, preprocess_text_classification_dataset
+    global requires_trl_native_dataset
     global get_vision_collator, load_vision_dataset, preprocess_vision_dataset
     global LightEvalCallback, run_lighteval
     global get_peft_model_with_lora, load_model_and_tokenizer
-    global get_llm_target_modules, get_num_labels_from_dataset, get_vision_target_modules
+    global get_llm_target_modules, get_text_target_modules
+    global get_num_labels_from_dataset, get_id2label, get_label2id, get_vision_target_modules
     global compute_metrics_for_classification, compute_metrics_for_lm
     global create_trainer, prepare_model_for_training
 
@@ -62,12 +70,17 @@ def _ensure_runtime_imports():
         value is None
         for value in (
             get_text_collator,
+            get_text_classification_collator,
             load_text_dataset,
             prepare_text_dataset_for_trl,
             preprocess_text_dataset,
+            preprocess_text_classification_dataset,
             requires_trl_native_dataset,
         )
     ):
+        from .data.text_data import (
+            get_text_classification_collator as imported_get_text_classification_collator,
+        )
         from .data.text_data import (
             get_text_collator as imported_get_text_collator,
         )
@@ -78,6 +91,9 @@ def _ensure_runtime_imports():
             prepare_text_dataset_for_trl as imported_prepare_text_dataset_for_trl,
         )
         from .data.text_data import (
+            preprocess_text_classification_dataset as imported_preprocess_text_classification_dataset,
+        )
+        from .data.text_data import (
             preprocess_text_dataset as imported_preprocess_text_dataset,
         )
         from .data.text_data import (
@@ -86,12 +102,16 @@ def _ensure_runtime_imports():
 
         if get_text_collator is None:
             get_text_collator = imported_get_text_collator
+        if get_text_classification_collator is None:
+            get_text_classification_collator = imported_get_text_classification_collator
         if load_text_dataset is None:
             load_text_dataset = imported_load_text_dataset
         if prepare_text_dataset_for_trl is None:
             prepare_text_dataset_for_trl = imported_prepare_text_dataset_for_trl
         if preprocess_text_dataset is None:
             preprocess_text_dataset = imported_preprocess_text_dataset
+        if preprocess_text_classification_dataset is None:
+            preprocess_text_classification_dataset = imported_preprocess_text_classification_dataset
         if requires_trl_native_dataset is None:
             requires_trl_native_dataset = imported_requires_trl_native_dataset
 
@@ -147,7 +167,26 @@ def _ensure_runtime_imports():
 
         get_llm_target_modules = imported_get_llm_target_modules
 
-    if get_num_labels_from_dataset is None or get_vision_target_modules is None:
+    if get_text_target_modules is None:
+        from .models.text import get_text_target_modules as imported_get_text_target_modules
+
+        get_text_target_modules = imported_get_text_target_modules
+
+    if any(
+        value is None
+        for value in (
+            get_num_labels_from_dataset,
+            get_id2label,
+            get_label2id,
+            get_vision_target_modules,
+        )
+    ):
+        from .models.vision import (
+            get_id2label as imported_get_id2label,
+        )
+        from .models.vision import (
+            get_label2id as imported_get_label2id,
+        )
         from .models.vision import (
             get_num_labels_from_dataset as imported_get_num_labels_from_dataset,
         )
@@ -157,6 +196,10 @@ def _ensure_runtime_imports():
 
         if get_num_labels_from_dataset is None:
             get_num_labels_from_dataset = imported_get_num_labels_from_dataset
+        if get_id2label is None:
+            get_id2label = imported_get_id2label
+        if get_label2id is None:
+            get_label2id = imported_get_label2id
         if get_vision_target_modules is None:
             get_vision_target_modules = imported_get_vision_target_modules
 
@@ -433,6 +476,98 @@ def train_vision(config: Config) -> None:
             trainer.push_to_hub()
 
 
+def train_text_classification(config: Config) -> None:
+    _ensure_runtime_imports()
+
+    wh = get_warning_handler()
+    if wh is not None:
+        wh.start_buffering()
+    with Status("[bold blue]Loading dataset...", console=console):
+        dataset = load_text_dataset(config.data)
+        train_split = dataset[config.data.train_split]
+        num_labels = get_num_labels_from_dataset(train_split, label_column=config.data.label_column)
+        id2label = get_id2label(train_split, label_column=config.data.label_column)
+        label2id = get_label2id(train_split, label_column=config.data.label_column)
+    if wh is not None:
+        wh.flush_buffered()
+
+    if wh is not None:
+        wh.start_buffering()
+    with Status("[bold blue]Loading model...", console=console):
+        model, tokenizer = load_model_and_tokenizer(
+            config.model,
+            num_labels=num_labels,
+            max_seq_length=config.data.max_seq_length,
+            id2label=id2label or None,
+            label2id=label2id or None,
+        )
+
+        if config.lora.target_modules is None or config.lora.target_modules == [
+            "q_proj",
+            "v_proj",
+            "k_proj",
+            "o_proj",
+        ]:
+            config.lora.target_modules = get_text_target_modules(config.model.model_name_or_path)
+
+        is_quantized = config.model.load_in_4bit or config.model.load_in_8bit
+        model = get_peft_model_with_lora(
+            model,
+            config.lora,
+            model_type="text_classification",
+            is_quantized=is_quantized,
+        )
+
+        model = prepare_model_for_training(model, config.training, tokenizer)
+    if wh is not None:
+        wh.flush_buffered()
+
+    print_model_size(model)
+
+    if wh is not None:
+        wh.start_buffering()
+    with Status("[bold blue]Preprocessing dataset...", console=console):
+        processed_dataset = preprocess_text_classification_dataset(
+            dataset,
+            tokenizer,
+            config.data,
+            shuffle_seed=config.training.data_seed,
+        )
+    if wh is not None:
+        wh.flush_buffered()
+
+    train_dataset = processed_dataset[config.data.train_split]
+    eval_dataset = None
+    if config.data.validation_split in processed_dataset:
+        eval_dataset = processed_dataset[config.data.validation_split]
+
+    data_collator = get_text_classification_collator(tokenizer)
+    compute_metrics = compute_metrics_for_classification if eval_dataset is not None else None
+
+    trainer = create_trainer(
+        model=model,
+        training_config=config.training,
+        model_config=config.model,
+        train_dataset=train_dataset,
+        data_config=config.data,
+        benchmark_eval_config=config.benchmark_eval,
+        eval_dataset=eval_dataset,
+        processing_class=tokenizer,
+        data_collator=data_collator,
+        compute_metrics=compute_metrics,
+        lora_config=config.lora,
+    )
+
+    _run_trainer_training(trainer, resume_from_checkpoint=config.training.resume_from_checkpoint)
+
+    with Status("[bold blue]Saving model...", console=console):
+        trainer.save_model()
+
+    if config.training.push_to_hub:
+        with Status("[bold blue]Pushing to Hub...", console=console):
+            trainer.push_to_hub()
+
+
 def main() -> None:
     """Main entry point."""
     args = parse_args()
@@ -521,6 +656,8 @@ def main() -> None:
 
     if config.model.model_type == "vision":
         train_vision(config)
+    elif config.model.model_type == "text_classification":
+        train_text_classification(config)
     else:
         train_llm(config)
 

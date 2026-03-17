@@ -4,6 +4,7 @@ import os
 import tempfile
 
 import yaml
+
 from lora_finetune.config import (
     AugmentationConfig,
     BenchmarkEvalConfig,
@@ -174,6 +175,13 @@ class TestModelConfig:
             model_type="vision",
         )
         assert config.model_type == "vision"
+
+    def test_text_classification_model_type(self):
+        config = ModelConfig(
+            model_name_or_path="roberta-base",
+            model_type="text_classification",
+        )
+        assert config.model_type == "text_classification"
 
     def test_unsloth_flag(self):
         """Test Unsloth opt-in flag."""

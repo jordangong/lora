@@ -27,6 +27,7 @@ from lora_finetune.models.llm import (
     get_special_tokens_dict,
     resize_token_embeddings,
 )
+from lora_finetune.models.text import TEXT_TARGET_MODULES, get_text_target_modules
 from lora_finetune.models.vision import (
     VISION_TARGET_MODULES,
     get_id2label,
@@ -359,6 +360,65 @@ class TestLoadModelAndTokenizerSignature:
         assert captured["kwargs"]["ignore_mismatched_sizes"] is True
         assert captured["processor_args"]["model_name_or_path"] == "meta-llama/Meta-Llama-3-8B"
 
+    def test_text_classification_passes_label_metadata(self, monkeypatch):
+        captured = {}
+
+        class FakeConfig:
+            pad_token_id = None
+
+        class FakeGenerationConfig:
+            pad_token_id = None
+
+        class FakeModel:
+            config = FakeConfig()
+            generation_config = FakeGenerationConfig()
+
+        class FakeAutoModel:
+            @classmethod
+            def from_pretrained(cls, model_name_or_path, **kwargs):
+                captured["model_name_or_path"] = model_name_or_path
+                captured["kwargs"] = kwargs
+                return FakeModel()
+
+        class FakeTokenizer:
+            pad_token_id = 0
+            eos_token = "</s>"
+            eos_token_id = 2
+            pad_token = "<pad>"
+
+        class FakeAutoTokenizer:
+            @classmethod
+            def from_pretrained(
+                cls, model_name_or_path, trust_remote_code=False, padding_side="right"
+            ):
+                captured["tokenizer_args"] = {
+                    "model_name_or_path": model_name_or_path,
+                    "trust_remote_code": trust_remote_code,
+                    "padding_side": padding_side,
+                }
+                return FakeTokenizer()
+
+        monkeypatch.setitem(
+            base_module.MODEL_TYPE_TO_AUTO_CLASS,
+            "text_classification",
+            FakeAutoModel,
+        )
+        monkeypatch.setattr(base_module, "AutoTokenizer", FakeAutoTokenizer)
+
+        model, tokenizer = load_model_and_tokenizer(
+            ModelConfig(model_type="text_classification", model_name_or_path="roberta-base"),
+            2,
+            id2label={0: "negative", 1: "positive"},
+            label2id={"negative": 0, "positive": 1},
+        )
+
+        assert isinstance(model, FakeModel)
+        assert isinstance(tokenizer, FakeTokenizer)
+        assert captured["kwargs"]["num_labels"] == 2
+        assert captured["kwargs"]["ignore_mismatched_sizes"] is True
+        assert captured["kwargs"]["id2label"] == {0: "negative", 1: "positive"}
+        assert captured["kwargs"]["label2id"] == {"negative": 0, "positive": 1}
+
     def test_get_peft_model_with_lora_uses_unsloth_when_enabled(self, monkeypatch):
         """Test that Unsloth PEFT patching is used when requested."""
         captured = {}
@@ -443,12 +503,14 @@ class TestModelTypeMappings:
         assert "causal_lm" in MODEL_TYPE_TO_AUTO_CLASS
         assert "seq2seq" in MODEL_TYPE_TO_AUTO_CLASS
         assert "vision" in MODEL_TYPE_TO_AUTO_CLASS
+        assert "text_classification" in MODEL_TYPE_TO_AUTO_CLASS
 
     def test_model_type_to_task_type(self):
         """Test model type to task type mapping."""
         assert "causal_lm" in MODEL_TYPE_TO_TASK_TYPE
         assert "seq2seq" in MODEL_TYPE_TO_TASK_TYPE
         assert "vision" in MODEL_TYPE_TO_TASK_TYPE
+        assert "text_classification" in MODEL_TYPE_TO_TASK_TYPE
 
 
 class TestGetLlmTargetModules:
@@ -533,6 +595,24 @@ class TestGetVisionTargetModules:
         """Test target modules for unknown vision models."""
         modules = get_vision_target_modules("unknown-vision-model")
         assert modules == VISION_TARGET_MODULES["default"]
+
+
+class TestGetTextTargetModules:
+    def test_roberta_model(self):
+        modules = get_text_target_modules("roberta-base")
+        assert modules == TEXT_TARGET_MODULES["roberta"]
+
+    def test_deberta_model(self):
+        modules = get_text_target_modules("microsoft/deberta-v3-base")
+        assert modules == TEXT_TARGET_MODULES["deberta-v3"]
+
+    def test_distilbert_model(self):
+        modules = get_text_target_modules("distilbert-base-uncased")
+        assert modules == TEXT_TARGET_MODULES["distilbert"]
+
+    def test_unknown_text_model(self):
+        modules = get_text_target_modules("unknown-text-model")
+        assert modules == TEXT_TARGET_MODULES["default"]
 
 
 class TestGetSpecialTokensDict:
@@ -650,6 +730,17 @@ class TestVisionDatasetHelpers:
         id2label = get_id2label(dataset)
         assert id2label == {0: "cat", 1: "dog", 2: "bird"}
 
+    def test_get_id2label_uses_custom_label_column(self):
+        class MockFeature:
+            names = ["negative", "positive"]
+
+        class MockDataset:
+            features = {"sentiment": MockFeature()}
+
+        dataset = MockDataset()
+        id2label = get_id2label(dataset, label_column="sentiment")
+        assert id2label == {0: "negative", 1: "positive"}
+
     def test_get_id2label_no_features(self):
         """Test get_id2label with no features."""
 
@@ -672,6 +763,17 @@ class TestVisionDatasetHelpers:
         dataset = MockDataset()
         label2id = get_label2id(dataset)
         assert label2id == {"cat": 0, "dog": 1, "bird": 2}
+
+    def test_get_label2id_uses_custom_label_column(self):
+        class MockFeature:
+            names = ["negative", "positive"]
+
+        class MockDataset:
+            features = {"sentiment": MockFeature()}
+
+        dataset = MockDataset()
+        label2id = get_label2id(dataset, label_column="sentiment")
+        assert label2id == {"negative": 0, "positive": 1}
 
 
 class TestGetTaskType:
@@ -700,6 +802,13 @@ class TestGetTaskType:
         config = LoraConfig()
         task_type = _get_task_type("vision", config)
         assert task_type == TaskType.FEATURE_EXTRACTION
+
+    def test_text_classification_task_type(self):
+        from peft import TaskType
+
+        config = LoraConfig()
+        task_type = _get_task_type("text_classification", config)
+        assert task_type == TaskType.SEQ_CLS
 
     def test_custom_task_type_override(self):
         """Test that task_type in config overrides model type."""

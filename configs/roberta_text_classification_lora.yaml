@@ -1,0 +1,59 @@
+model:
+  model_name_or_path: roberta-base
+  model_type: text_classification
+  torch_dtype: float32
+  trust_remote_code: false
+  use_flash_attention_2: false
+  load_in_4bit: false
+  load_in_8bit: false
+
+lora:
+  method: lora
+  r: 16
+  alpha: 32
+  dropout: 0.05
+  target_modules:
+    - query
+    - key
+    - value
+    - dense
+  bias: none
+  modules_to_save: ["classifier"]
+
+data:
+  dataset_name: glue
+  dataset_config_name: sst2
+  text_column: sentence
+  label_column: label
+  max_seq_length: 512
+  preprocessing_num_workers: 4
+  train_split: train
+  validation_split: validation
+
+training:
+  output_dir: ./outputs/roberta-sst2-lora
+  num_train_epochs: 3
+  per_device_train_batch_size: 32
+  per_device_eval_batch_size: 64
+  gradient_accumulation_steps: 1
+  learning_rate: 2.0e-4
+  weight_decay: 0.01
+  warmup_ratio: 0.06
+  max_grad_norm: 1.0
+  lr_scheduler_type: linear
+  logging_steps: 50
+  save_steps: 500
+  eval_steps: 500
+  eval_strategy: steps
+  save_total_limit: 2
+  load_best_model_at_end: true
+  metric_for_best_model: eval_accuracy
+  greater_is_better: true
+  bf16: false
+  fp16: true
+  gradient_checkpointing: false
+  optim: adamw_torch_fused
+  seed: 42
+  dataloader_num_workers: 4
+  report_to: wandb
+  wandb_project: roberta-text-classification

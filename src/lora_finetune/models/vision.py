@@ -30,7 +30,17 @@ def get_vision_target_modules(model_name_or_path: str) -> List[str]:
     return VISION_TARGET_MODULES["default"]
 
 
-def get_num_labels_from_dataset(dataset) -> int:
+def _resolve_label_column(dataset, label_column: str) -> str:
+    if hasattr(dataset, "features") and label_column in dataset.features:
+        return label_column
+    if hasattr(dataset, "features") and label_column == "label" and "labels" in dataset.features:
+        return "labels"
+    if hasattr(dataset, "features") and label_column == "labels" and "label" in dataset.features:
+        return "label"
+    return label_column
+
+
+def get_num_labels_from_dataset(dataset, label_column: str = "label") -> int:
     """Get number of labels from dataset."""
 
     def _extract_num_classes(feature) -> int | None:
@@ -44,13 +54,9 @@ def get_num_labels_from_dataset(dataset) -> int:
 
         return None
 
-    label_column = None
-    if hasattr(dataset, "features") and "label" in dataset.features:
-        label_column = "label"
-    elif hasattr(dataset, "features") and "labels" in dataset.features:
-        label_column = "labels"
+    label_column = _resolve_label_column(dataset, label_column)
 
-    if label_column is not None:
+    if hasattr(dataset, "features") and label_column in dataset.features:
         feature_num_classes = _extract_num_classes(dataset.features[label_column])
         if feature_num_classes is not None:
             return feature_num_classes
@@ -63,10 +69,8 @@ def get_num_labels_from_dataset(dataset) -> int:
 
     unique_labels = set()
     for example in dataset:
-        if "label" in example:
-            unique_labels.add(example["label"])
-        elif "labels" in example:
-            unique_labels.add(example["labels"])
+        if label_column in example:
+            unique_labels.add(example[label_column])
 
     if not unique_labels:
         raise ValueError("Could not infer number of labels from dataset")
@@ -74,15 +78,21 @@ def get_num_labels_from_dataset(dataset) -> int:
     return len(unique_labels)
 
 
-def get_id2label(dataset) -> Dict[int, str]:
+def get_id2label(dataset, label_column: str = "label") -> Dict[int, str]:
     """Get id2label mapping from dataset."""
-    if hasattr(dataset, "features") and "label" in dataset.features:
-        return {i: name for i, name in enumerate(dataset.features["label"].names)}
+    label_column = _resolve_label_column(dataset, label_column)
+    if hasattr(dataset, "features") and label_column in dataset.features:
+        names = getattr(dataset.features[label_column], "names", None)
+        if names:
+            return {i: name for i, name in enumerate(names)}
     return {}
 
 
-def get_label2id(dataset) -> Dict[str, int]:
+def get_label2id(dataset, label_column: str = "label") -> Dict[str, int]:
     """Get label2id mapping from dataset."""
-    if hasattr(dataset, "features") and "label" in dataset.features:
-        return {name: i for i, name in enumerate(dataset.features["label"].names)}
+    label_column = _resolve_label_column(dataset, label_column)
+    if hasattr(dataset, "features") and label_column in dataset.features:
+        names = getattr(dataset.features[label_column], "names", None)
+        if names:
+            return {name: i for i, name in enumerate(names)}
     return {}
