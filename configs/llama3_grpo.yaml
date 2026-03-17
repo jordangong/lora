@@ -1,0 +1,78 @@
+model:
+  model_name_or_path: meta-llama/Meta-Llama-3-8B
+  model_type: causal_lm
+  use_unsloth: false
+  torch_dtype: bfloat16
+  trust_remote_code: false
+  use_flash_attention_2: true
+  load_in_4bit: false
+  load_in_8bit: false
+
+lora:
+  method: lora
+  r: 16
+  alpha: 32
+  dropout: 0.05
+  target_modules:
+    - q_proj
+    - k_proj
+    - v_proj
+    - o_proj
+    - gate_proj
+    - up_proj
+    - down_proj
+  bias: none
+
+data:
+  dataset_name: openai/gsm8k
+  dataset_config_name: main
+  preprocessing_num_workers: 4
+  eval_split_ratio: 0.02
+  max_train_samples: 5000
+  max_eval_samples: 200
+
+training:
+  output_dir: ./outputs/llama3-grpo
+  trainer_type: grpo
+  llm_trainer: trl
+  num_train_epochs: 1
+  per_device_train_batch_size: 1
+  per_device_eval_batch_size: 1
+  gradient_accumulation_steps: 8
+  learning_rate: 1.0e-5
+  weight_decay: 0.0
+  warmup_ratio: 0.03
+  max_grad_norm: 1.0
+  lr_scheduler_type: cosine
+  logging_steps: 10
+  save_steps: 250
+  save_total_limit: 2
+  eval_steps: 250
+  eval_strategy: steps
+  save_strategy: steps
+  load_best_model_at_end: false
+  bf16: true
+  fp16: false
+  gradient_checkpointing: true
+  optim: adamw_torch_fused
+  seed: 42
+  report_to: wandb
+  wandb_project: llama3-grpo-finetune
+
+grpo:
+  reward_funcs:
+    - exact_match
+  reward_column: answer
+  max_prompt_length: 1024
+  max_completion_length: 512
+  num_generations: 4
+  temperature: 1.0
+  top_p: 1.0
+  beta: 0.0
+  num_iterations: 1
+  epsilon: 0.2
+  loss_type: dapo
+  scale_rewards: group
+
+benchmark_eval:
+  enabled: false

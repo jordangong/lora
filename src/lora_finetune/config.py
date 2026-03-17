@@ -351,6 +351,64 @@ class BenchmarkEvalConfig:
 
 
 @dataclass
+class DPOConfig:
+    beta: float = field(default=0.1, metadata={"help": "DPO beta coefficient"})
+    max_prompt_length: Optional[int] = field(
+        default=512, metadata={"help": "Maximum prompt length for DPO"}
+    )
+    max_completion_length: Optional[int] = field(
+        default=None, metadata={"help": "Maximum completion length for DPO"}
+    )
+    max_length: Optional[int] = field(
+        default=1024, metadata={"help": "Maximum total sequence length for DPO"}
+    )
+    reference_free: bool = field(default=False, metadata={"help": "Enable reference-free DPO loss"})
+    label_smoothing: float = field(default=0.0, metadata={"help": "Label smoothing factor for DPO"})
+    disable_dropout: bool = field(
+        default=True, metadata={"help": "Disable dropout in DPO trainer models"}
+    )
+
+
+@dataclass
+class GRPOConfig:
+    reward_funcs: List[str] = field(
+        default_factory=lambda: ["non_empty"],
+        metadata={"help": "Reward functions for GRPO"},
+    )
+    reward_column: str = field(
+        default="answer",
+        metadata={"help": "Dataset column used by exact_match rewards"},
+    )
+    reward_regex: Optional[str] = field(
+        default=None,
+        metadata={"help": "Regex used by the regex reward function"},
+    )
+    max_prompt_length: Optional[int] = field(
+        default=512, metadata={"help": "Maximum prompt length for GRPO"}
+    )
+    max_completion_length: Optional[int] = field(
+        default=256, metadata={"help": "Maximum completion length for GRPO"}
+    )
+    num_generations: int = field(
+        default=4, metadata={"help": "Number of completions generated per prompt for GRPO"}
+    )
+    temperature: float = field(default=1.0, metadata={"help": "Sampling temperature for GRPO"})
+    top_p: float = field(default=1.0, metadata={"help": "Top-p sampling for GRPO"})
+    top_k: Optional[int] = field(default=None, metadata={"help": "Top-k sampling for GRPO"})
+    beta: float = field(default=0.0, metadata={"help": "KL penalty coefficient for GRPO"})
+    num_iterations: int = field(
+        default=1, metadata={"help": "Number of optimization iterations per GRPO batch"}
+    )
+    epsilon: float = field(default=0.2, metadata={"help": "GRPO clipping epsilon"})
+    loss_type: str = field(default="dapo", metadata={"help": "TRL GRPO loss type"})
+    scale_rewards: str = field(default="group", metadata={"help": "Reward scaling mode for GRPO"})
+
+    def __post_init__(self):
+        if not self.reward_funcs:
+            raise ValueError("grpo.reward_funcs must contain at least one reward function")
+
+
+@dataclass
 class TrainingConfig:
     """Training configuration."""
 
@@ -430,6 +488,10 @@ class TrainingConfig:
     remove_unused_columns: bool = field(
         default=True, metadata={"help": "Remove unused columns from dataset"}
     )
+    trainer_type: Literal["sft", "dpo", "grpo"] = field(
+        default="sft",
+        metadata={"help": "Trainer type for causal LM finetuning: sft, dpo, or grpo"},
+    )
     llm_trainer: Literal["trl", "transformers"] = field(
         default="trl",
         metadata={"help": "Trainer backend for LLM finetuning: trl or transformers"},
@@ -475,6 +537,8 @@ class Config:
     lora: LoraConfig = field(default_factory=LoraConfig)
     data: DataConfig = field(default_factory=DataConfig)
     training: TrainingConfig = field(default_factory=TrainingConfig)
+    dpo: DPOConfig = field(default_factory=DPOConfig)
+    grpo: GRPOConfig = field(default_factory=GRPOConfig)
     benchmark_eval: BenchmarkEvalConfig = field(default_factory=BenchmarkEvalConfig)
 
     @classmethod
@@ -498,6 +562,8 @@ class Config:
         data_config = DataConfig(**data_dict, augmentation=aug_config)
 
         training_config = TrainingConfig(**config_dict.get("training", {}))
+        dpo_config = DPOConfig(**config_dict.get("dpo", {}))
+        grpo_config = GRPOConfig(**config_dict.get("grpo", {}))
         benchmark_eval_config = BenchmarkEvalConfig(**config_dict.get("benchmark_eval", {}))
 
         return cls(
@@ -505,6 +571,8 @@ class Config:
             lora=lora_config,
             data=data_config,
             training=training_config,
+            dpo=dpo_config,
+            grpo=grpo_config,
             benchmark_eval=benchmark_eval_config,
         )
 
@@ -517,6 +585,8 @@ class Config:
             "lora": self.lora.__dict__,
             "data": data_dict,
             "training": self.training.__dict__,
+            "dpo": self.dpo.__dict__,
+            "grpo": self.grpo.__dict__,
             "benchmark_eval": self.benchmark_eval.__dict__,
         }
         with open(path, "w") as f:
@@ -527,7 +597,15 @@ class Config:
         for key, value in args.items():
             if value is None:
                 continue
-            for config_name in ["model", "lora", "data", "training", "benchmark_eval"]:
+            for config_name in [
+                "model",
+                "lora",
+                "data",
+                "training",
+                "dpo",
+                "grpo",
+                "benchmark_eval",
+            ]:
                 config_obj = getattr(self, config_name)
                 if hasattr(config_obj, key):
                     setattr(config_obj, key, value)

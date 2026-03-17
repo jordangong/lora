@@ -14,6 +14,8 @@ from lora_finetune.data.text_data import (
     get_text_classification_collator,
     get_text_collator,
     load_text_dataset,
+    prepare_grpo_dataset_for_trl,
+    prepare_preference_dataset_for_trl,
     prepare_text_dataset_for_trl,
     preprocess_text_classification_dataset,
     preprocess_text_dataset,
@@ -1044,6 +1046,95 @@ class TestPrepareTextDatasetForTrl:
         assert prepared["train"].column_names == ["messages"]
         assert prepared["train"][0]["messages"][0] == {"role": "user", "content": "hi"}
         assert prepared["train"][0]["messages"][1] == {"role": "assistant", "content": "hello"}
+
+
+class TestPreparePreferenceDatasetForTrl:
+    def test_preference_examples_pass_through(self):
+        dataset = DatasetDict(
+            {
+                "train": Dataset.from_dict(
+                    {
+                        "prompt": ["Question: hi\n\nAnswer: "],
+                        "chosen": ["hello"],
+                        "rejected": ["goodbye"],
+                    }
+                )
+            }
+        )
+
+        prepared = prepare_preference_dataset_for_trl(
+            dataset,
+            DataConfig(preprocessing_num_workers=1),
+        )
+
+        assert prepared["train"].column_names == ["prompt", "chosen", "rejected"]
+        assert prepared["train"][0]["chosen"] == "hello"
+
+    def test_instruction_examples_gain_prompt_column(self):
+        dataset = DatasetDict(
+            {
+                "train": Dataset.from_dict(
+                    {
+                        "instruction": ["Translate"],
+                        "input": ["hello"],
+                        "chosen": ["bonjour"],
+                        "rejected": ["salut"],
+                    }
+                )
+            }
+        )
+
+        prepared = prepare_preference_dataset_for_trl(
+            dataset,
+            DataConfig(preprocessing_num_workers=1),
+        )
+
+        example = prepared["train"][0]
+        assert "Translate" in example["prompt"]
+        assert example["chosen"] == "bonjour"
+        assert example["rejected"] == "salut"
+
+
+class TestPrepareGrpoDatasetForTrl:
+    def test_text_examples_become_prompts(self):
+        dataset = DatasetDict(
+            {
+                "train": Dataset.from_dict(
+                    {
+                        "text": ["Solve 1+1"],
+                        "answer": ["2"],
+                    }
+                )
+            }
+        )
+
+        prepared = prepare_grpo_dataset_for_trl(
+            dataset,
+            DataConfig(text_column="text", preprocessing_num_workers=1),
+        )
+
+        assert prepared["train"][0]["prompt"] == "Solve 1+1"
+        assert prepared["train"][0]["answer"] == "2"
+
+    def test_instruction_examples_become_prompts(self):
+        dataset = DatasetDict(
+            {
+                "train": Dataset.from_dict(
+                    {
+                        "instruction": ["Translate"],
+                        "input": ["hello"],
+                        "answer": ["bonjour"],
+                    }
+                )
+            }
+        )
+
+        prepared = prepare_grpo_dataset_for_trl(
+            dataset,
+            DataConfig(preprocessing_num_workers=1),
+        )
+
+        assert "Translate" in prepared["train"][0]["prompt"]
 
 
 class TestRequiresTrlNativeDataset:

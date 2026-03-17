@@ -13,6 +13,8 @@ import lora_finetune.trainer as trainer_module
 from lora_finetune.config import (
     BenchmarkEvalConfig,
     DataConfig,
+    DPOConfig,
+    GRPOConfig,
     LoraConfig,
     ModelConfig,
     TrainingConfig,
@@ -20,6 +22,7 @@ from lora_finetune.config import (
 from lora_finetune.trainer import (
     LoraTrainer,
     RichProgressCallback,
+    build_grpo_reward_functions,
     compute_metrics_for_classification,
     compute_metrics_for_lm,
     create_trainer,
@@ -28,6 +31,7 @@ from lora_finetune.trainer import (
     get_sft_training_arguments,
     get_training_arguments,
     prepare_model_for_training,
+    resolve_trainer_type,
     setup_wandb,
 )
 
@@ -1396,6 +1400,161 @@ class TestCreateTrainer:
                 )
         finally:
             monkeypatch.setattr(trainer_module, "LoraSFTTrainer", original_lora_sft_trainer)
+
+    def test_create_trainer_uses_dpo_trainer_when_requested(self, monkeypatch):
+        model = nn.Linear(10, 5)
+        processing_class = object()
+        training_config = TrainingConfig(
+            output_dir="./test-output",
+            eval_strategy="no",
+            load_best_model_at_end=False,
+            report_to="none",
+            llm_trainer="trl",
+            trainer_type="dpo",
+        )
+        model_config = ModelConfig(model_type="causal_lm")
+
+        class SimpleDataset(torch.utils.data.Dataset):
+            def __len__(self):
+                return 2
+
+            def __getitem__(self, idx):
+                return {"prompt": "hi", "chosen": "hello", "rejected": "goodbye"}
+
+        class FakeDPOConfig:
+            def __init__(self, **kwargs):
+                for key, value in kwargs.items():
+                    setattr(self, key, value)
+
+        class FakeDPOTrainer:
+            def __init__(self, *args, processing_class=None, **kwargs):
+                self.processing_class = processing_class
+                self.args = kwargs.get("args")
+
+            def remove_callback(self, callback_cls):
+                return None
+
+        original_dpo_config = trainer_module.TRLDPOConfig
+        original_lora_dpo_trainer = trainer_module.LoraDPOTrainer
+        try:
+            monkeypatch.setattr(trainer_module, "TRLDPOConfig", FakeDPOConfig)
+            monkeypatch.setattr(trainer_module, "LoraDPOTrainer", FakeDPOTrainer)
+            trainer = create_trainer(
+                model=model,
+                training_config=training_config,
+                model_config=model_config,
+                train_dataset=SimpleDataset(),
+                processing_class=processing_class,
+                dpo_config=DPOConfig(),
+                data_config=DataConfig(preprocessing_num_workers=1),
+            )
+        finally:
+            monkeypatch.setattr(trainer_module, "TRLDPOConfig", original_dpo_config)
+            monkeypatch.setattr(trainer_module, "LoraDPOTrainer", original_lora_dpo_trainer)
+
+        assert isinstance(trainer, FakeDPOTrainer)
+        assert trainer.processing_class is processing_class
+        assert isinstance(trainer.args, FakeDPOConfig)
+        assert trainer.args.beta == 0.1
+
+    def test_create_trainer_uses_grpo_trainer_when_requested(self, monkeypatch):
+        model = nn.Linear(10, 5)
+        processing_class = object()
+        training_config = TrainingConfig(
+            output_dir="./test-output",
+            eval_strategy="no",
+            load_best_model_at_end=False,
+            report_to="none",
+            llm_trainer="trl",
+            trainer_type="grpo",
+        )
+        model_config = ModelConfig(model_type="causal_lm")
+
+        class SimpleDataset(torch.utils.data.Dataset):
+            def __len__(self):
+                return 2
+
+            def __getitem__(self, idx):
+                return {"prompt": "Solve 1+1", "answer": "2"}
+
+        class FakeGRPOConfig:
+            def __init__(self, **kwargs):
+                for key, value in kwargs.items():
+                    setattr(self, key, value)
+
+        class FakeGRPOTrainer:
+            def __init__(self, *args, processing_class=None, reward_funcs=None, **kwargs):
+                self.processing_class = processing_class
+                self.reward_funcs = reward_funcs
+                self.args = kwargs.get("args")
+
+            def remove_callback(self, callback_cls):
+                return None
+
+        original_grpo_config = trainer_module.TRLGRPOConfig
+        original_lora_grpo_trainer = trainer_module.LoraGRPOTrainer
+        try:
+            monkeypatch.setattr(trainer_module, "TRLGRPOConfig", FakeGRPOConfig)
+            monkeypatch.setattr(trainer_module, "LoraGRPOTrainer", FakeGRPOTrainer)
+            trainer = create_trainer(
+                model=model,
+                training_config=training_config,
+                model_config=model_config,
+                train_dataset=SimpleDataset(),
+                processing_class=processing_class,
+                grpo_config=GRPOConfig(reward_funcs=["length"]),
+            )
+        finally:
+            monkeypatch.setattr(trainer_module, "TRLGRPOConfig", original_grpo_config)
+            monkeypatch.setattr(trainer_module, "LoraGRPOTrainer", original_lora_grpo_trainer)
+
+        assert isinstance(trainer, FakeGRPOTrainer)
+        assert trainer.processing_class is processing_class
+        assert isinstance(trainer.args, FakeGRPOConfig)
+        assert len(trainer.reward_funcs) == 1
+
+
+class TestTrainerTypeResolution:
+    def test_resolve_trainer_type_returns_transformers_for_non_causal_models(self):
+        assert (
+            resolve_trainer_type(
+                TrainingConfig(trainer_type="sft"),
+                ModelConfig(model_type="text_classification"),
+            )
+            == "transformers"
+        )
+
+    def test_resolve_trainer_type_returns_dpo_for_causal_lm(self):
+        assert (
+            resolve_trainer_type(
+                TrainingConfig(trainer_type="dpo", llm_trainer="trl"),
+                ModelConfig(model_type="causal_lm"),
+            )
+            == "dpo"
+        )
+
+    def test_resolve_trainer_type_rejects_non_trl_dpo(self):
+        with pytest.raises(ValueError, match="requires training.llm_trainer='trl'"):
+            resolve_trainer_type(
+                TrainingConfig(trainer_type="dpo", llm_trainer="transformers"),
+                ModelConfig(model_type="causal_lm"),
+            )
+
+
+class TestGrpoRewardFunctions:
+    def test_build_grpo_reward_functions_exact_match(self):
+        reward_func = build_grpo_reward_functions(
+            GRPOConfig(reward_funcs=["exact_match"], reward_column="answer")
+        )[0]
+
+        assert reward_func(["2", "3"], answer=["2", "4"]) == [1.0, 0.0]
+
+    def test_build_grpo_reward_functions_regex(self):
+        reward_func = build_grpo_reward_functions(
+            GRPOConfig(reward_funcs=["regex"], reward_regex=r"^Answer:")
+        )[0]
+
+        assert reward_func(["Answer: yes", "no"]) == [1.0, 0.0]
 
 
 class TestPrepareModelWithTokenizer:

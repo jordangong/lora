@@ -4,6 +4,7 @@ import argparse
 import tempfile
 
 import yaml
+
 from lora_finetune.cli import (
     _add_dataclass_args,
     _apply_args_to_config,
@@ -16,6 +17,8 @@ from lora_finetune.config import (
     AugmentationConfig,
     Config,
     DataConfig,
+    DPOConfig,
+    GRPOConfig,
     LoraConfig,
     ModelConfig,
     TrainingConfig,
@@ -115,6 +118,32 @@ class TestAddDataclassArgs:
         assert args.num_train_epochs == 5
         assert args.learning_rate == 1e-4
         assert args.llm_trainer == "transformers"
+
+    def test_add_training_config_trainer_type_arg(self):
+        parser = argparse.ArgumentParser()
+        _add_dataclass_args(parser, TrainingConfig)
+
+        args = parser.parse_args(["--trainer_type", "dpo"])
+
+        assert args.trainer_type == "dpo"
+
+    def test_add_dpo_and_grpo_prefixed_args(self):
+        parser = argparse.ArgumentParser()
+        _add_dataclass_args(parser, DPOConfig, prefix="dpo_")
+        _add_dataclass_args(parser, GRPOConfig, prefix="grpo_")
+
+        args = parser.parse_args(
+            [
+                "--dpo_beta",
+                "0.2",
+                "--grpo_reward_funcs",
+                "length",
+                "exact_match",
+            ]
+        )
+
+        assert args.dpo_beta == 0.2
+        assert args.grpo_reward_funcs == ["length", "exact_match"]
 
     def test_boolean_args(self):
         """Test boolean arguments with --flag and --no_flag."""
@@ -348,6 +377,68 @@ class TestBuildConfig:
         assert isinstance(config, Config)
         assert isinstance(config.model, ModelConfig)
         assert isinstance(config.lora, LoraConfig)
+
+    def test_build_config_applies_dpo_and_grpo_args(self):
+        args = argparse.Namespace(
+            config=None,
+            trainer_type="grpo",
+            dpo_beta=0.2,
+            grpo_reward_funcs=["length", "exact_match"],
+        )
+        args.__dict__.update(
+            {f"lora_{k}": None for k in vars(LoraConfig()).keys() if not k.startswith("_")}
+        )
+        args.__dict__.update(
+            {f"no_lora_{k}": None for k in vars(LoraConfig()).keys() if not k.startswith("_")}
+        )
+        args.__dict__.update({k: None for k in vars(ModelConfig()).keys() if not k.startswith("_")})
+        args.__dict__.update(
+            {f"no_{k}": None for k in vars(ModelConfig()).keys() if not k.startswith("_")}
+        )
+        args.__dict__.update({k: None for k in vars(DataConfig()).keys() if not k.startswith("_")})
+        args.__dict__.update(
+            {f"no_{k}": None for k in vars(DataConfig()).keys() if not k.startswith("_")}
+        )
+        args.__dict__.update(
+            {
+                k: None
+                for k in vars(TrainingConfig()).keys()
+                if not k.startswith("_") and k != "trainer_type"
+            }
+        )
+        args.__dict__.update(
+            {f"no_{k}": None for k in vars(TrainingConfig()).keys() if not k.startswith("_")}
+        )
+        args.__dict__.update(
+            {
+                f"dpo_{k}": None
+                for k in vars(DPOConfig()).keys()
+                if not k.startswith("_") and k != "beta"
+            }
+        )
+        args.__dict__.update(
+            {
+                f"grpo_{k}": None
+                for k in vars(GRPOConfig()).keys()
+                if not k.startswith("_") and k != "reward_funcs"
+            }
+        )
+        args.__dict__.update(
+            {f"aug_{k}": None for k in vars(AugmentationConfig()).keys() if not k.startswith("_")}
+        )
+        args.__dict__.update(
+            {
+                f"no_aug_{k}": None
+                for k in vars(AugmentationConfig()).keys()
+                if not k.startswith("_")
+            }
+        )
+
+        config = build_config(args)
+
+        assert config.training.trainer_type == "grpo"
+        assert config.dpo.beta == 0.2
+        assert config.grpo.reward_funcs == ["length", "exact_match"]
 
     def test_build_config_from_yaml(self):
         """Test building config from YAML file."""

@@ -7,7 +7,14 @@ from datasets import Dataset, DatasetDict
 from torch import nn
 
 import lora_finetune.train as train_module
-from lora_finetune.config import Config, DataConfig, ModelConfig, TrainingConfig
+from lora_finetune.config import (
+    Config,
+    DataConfig,
+    DPOConfig,
+    GRPOConfig,
+    ModelConfig,
+    TrainingConfig,
+)
 
 
 class TestTrainLlm:
@@ -242,6 +249,155 @@ class TestTrainLlm:
 
         assert cleanup_calls == ["cleanup"]
         assert trainer.save_model_calls == 0
+
+    def test_train_llm_uses_preference_dataset_path_for_dpo(self, monkeypatch):
+        model = nn.Linear(10, 5)
+        dataset = DatasetDict(
+            {
+                "train": Dataset.from_dict(
+                    {
+                        "prompt": ["Question: hi\n\nAnswer: "],
+                        "chosen": ["hello"],
+                        "rejected": ["goodbye"],
+                    }
+                )
+            }
+        )
+        config = Config(
+            model=ModelConfig(model_type="causal_lm"),
+            data=DataConfig(preprocessing_num_workers=1),
+            training=TrainingConfig(
+                output_dir="./test-output",
+                eval_strategy="no",
+                load_best_model_at_end=False,
+                report_to="none",
+                llm_trainer="trl",
+                trainer_type="dpo",
+            ),
+            dpo=DPOConfig(beta=0.2),
+        )
+
+        class MockTokenizer:
+            pad_token_id = 0
+
+        class FakeTrainer:
+            def train(self, resume_from_checkpoint=None):
+                return None
+
+            def save_model(self):
+                return None
+
+            def push_to_hub(self):
+                return None
+
+        preference_calls = []
+        preprocess_calls = []
+        create_trainer_calls = []
+
+        monkeypatch.setattr(
+            train_module,
+            "load_model_and_tokenizer",
+            lambda model_config, max_seq_length=None: (model, MockTokenizer()),
+        )
+        monkeypatch.setattr(train_module, "get_llm_target_modules", lambda model_name: ["q_proj"])
+        monkeypatch.setattr(train_module, "get_peft_model_with_lora", lambda *args, **kwargs: model)
+        monkeypatch.setattr(
+            train_module, "prepare_model_for_training", lambda *args, **kwargs: model
+        )
+        monkeypatch.setattr(train_module, "print_model_size", lambda *args, **kwargs: None)
+        monkeypatch.setattr(train_module, "load_text_dataset", lambda data_config: dataset)
+        monkeypatch.setattr(
+            train_module,
+            "prepare_preference_dataset_for_trl",
+            lambda raw_dataset, data_config, shuffle_seed=None: (
+                preference_calls.append((raw_dataset, data_config, shuffle_seed)) or raw_dataset
+            ),
+        )
+        monkeypatch.setattr(
+            train_module,
+            "preprocess_text_dataset",
+            lambda raw_dataset, tokenizer, data_config, shuffle_seed=None: (
+                preprocess_calls.append((raw_dataset, tokenizer, data_config, shuffle_seed))
+                or raw_dataset
+            ),
+        )
+        monkeypatch.setattr(
+            train_module,
+            "create_trainer",
+            lambda **kwargs: create_trainer_calls.append(kwargs) or FakeTrainer(),
+        )
+
+        train_module.train_llm(config)
+
+        assert len(preference_calls) == 1
+        assert len(preprocess_calls) == 0
+        assert create_trainer_calls[0]["dpo_config"].beta == 0.2
+        assert create_trainer_calls[0]["grpo_config"] == config.grpo
+
+    def test_train_llm_uses_grpo_dataset_path_for_grpo(self, monkeypatch):
+        model = nn.Linear(10, 5)
+        dataset = DatasetDict(
+            {"train": Dataset.from_dict({"text": ["Solve 1+1"], "answer": ["2"]})}
+        )
+        config = Config(
+            model=ModelConfig(model_type="causal_lm"),
+            data=DataConfig(text_column="text", preprocessing_num_workers=1),
+            training=TrainingConfig(
+                output_dir="./test-output",
+                eval_strategy="no",
+                load_best_model_at_end=False,
+                report_to="none",
+                llm_trainer="trl",
+                trainer_type="grpo",
+            ),
+            grpo=GRPOConfig(reward_funcs=["exact_match"], reward_column="answer"),
+        )
+
+        class MockTokenizer:
+            pad_token_id = 0
+
+        class FakeTrainer:
+            def train(self, resume_from_checkpoint=None):
+                return None
+
+            def save_model(self):
+                return None
+
+            def push_to_hub(self):
+                return None
+
+        grpo_calls = []
+        create_trainer_calls = []
+
+        monkeypatch.setattr(
+            train_module,
+            "load_model_and_tokenizer",
+            lambda model_config, max_seq_length=None: (model, MockTokenizer()),
+        )
+        monkeypatch.setattr(train_module, "get_llm_target_modules", lambda model_name: ["q_proj"])
+        monkeypatch.setattr(train_module, "get_peft_model_with_lora", lambda *args, **kwargs: model)
+        monkeypatch.setattr(
+            train_module, "prepare_model_for_training", lambda *args, **kwargs: model
+        )
+        monkeypatch.setattr(train_module, "print_model_size", lambda *args, **kwargs: None)
+        monkeypatch.setattr(train_module, "load_text_dataset", lambda data_config: dataset)
+        monkeypatch.setattr(
+            train_module,
+            "prepare_grpo_dataset_for_trl",
+            lambda raw_dataset, data_config, shuffle_seed=None: (
+                grpo_calls.append((raw_dataset, data_config, shuffle_seed)) or raw_dataset
+            ),
+        )
+        monkeypatch.setattr(
+            train_module,
+            "create_trainer",
+            lambda **kwargs: create_trainer_calls.append(kwargs) or FakeTrainer(),
+        )
+
+        train_module.train_llm(config)
+
+        assert len(grpo_calls) == 1
+        assert create_trainer_calls[0]["grpo_config"].reward_funcs == ["exact_match"]
 
 
 class TestTrainTextClassification:

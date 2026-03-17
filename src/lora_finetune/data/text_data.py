@@ -185,6 +185,31 @@ def format_qa_as_prompt_completion(
     }
 
 
+def format_instruction_as_prompt(
+    example: Dict[str, Any],
+    template: str = DEFAULT_PROMPT_TEMPLATE,
+    prompt_column: str = "prompt",
+) -> Dict[str, str]:
+    instruction = example.get("instruction", "")
+    input_text = example.get("input", "")
+    if "{output}" in template:
+        prompt_template, _ = template.split("{output}", 1)
+        prompt = prompt_template.format(instruction=instruction, input=input_text)
+    else:
+        prompt = template.format(instruction=instruction, input=input_text, output="")
+    return {prompt_column: prompt}
+
+
+def format_qa_as_prompt(
+    example: Dict[str, Any],
+    prompt_column: str = "prompt",
+) -> Dict[str, str]:
+    question = example.get("question", "")
+    return {
+        prompt_column: f"Question: {question}\n\nAnswer: ",
+    }
+
+
 def maybe_append_eos(text: str, tokenizer: PreTrainedTokenizer, append_eos_token: bool) -> str:
     eos_token = getattr(tokenizer, "eos_token", None)
     if not append_eos_token or not eos_token or text.endswith(eos_token):
@@ -278,6 +303,26 @@ def normalize_conversations_to_messages(
     return {output_column: messages}
 
 
+def _apply_sample_limits(
+    dataset: DatasetDict,
+    config: DataConfig,
+    shuffle_seed: Optional[int] = None,
+) -> DatasetDict:
+    if config.max_train_samples:
+        train_dataset = shuffle_dataset_split(dataset[config.train_split], shuffle_seed)
+        dataset[config.train_split] = train_dataset.select(
+            range(min(config.max_train_samples, len(train_dataset)))
+        )
+
+    if config.validation_split in dataset and config.max_eval_samples:
+        eval_dataset = shuffle_dataset_split(dataset[config.validation_split], shuffle_seed)
+        dataset[config.validation_split] = eval_dataset.select(
+            range(min(config.max_eval_samples, len(dataset[config.validation_split])))
+        )
+
+    return dataset
+
+
 def prepare_text_dataset_for_trl(
     dataset: DatasetDict,
     config: DataConfig,
@@ -330,23 +375,94 @@ def prepare_text_dataset_for_trl(
             "Provide data.text_column or use a dataset with instruction/question fields."
         )
 
-    prepared_dataset = DatasetDict(prepared_splits)
+    return _apply_sample_limits(DatasetDict(prepared_splits), config, shuffle_seed)
 
-    if config.max_train_samples:
-        train_dataset = shuffle_dataset_split(prepared_dataset[config.train_split], shuffle_seed)
-        prepared_dataset[config.train_split] = train_dataset.select(
-            range(min(config.max_train_samples, len(train_dataset)))
+
+def prepare_preference_dataset_for_trl(
+    dataset: DatasetDict,
+    config: DataConfig,
+    shuffle_seed: Optional[int] = None,
+) -> DatasetDict:
+    template = config.prompt_template or DEFAULT_PROMPT_TEMPLATE
+    prepared_splits = {}
+
+    for split_name, split_data in dataset.items():
+        columns = split_data.column_names
+        if {"prompt", "chosen", "rejected"}.issubset(columns):
+            prepared_splits[split_name] = split_data
+            continue
+
+        map_kwargs = {}
+        if isinstance(split_data, Dataset):
+            map_kwargs["num_proc"] = config.preprocessing_num_workers
+
+        if {"instruction", "chosen", "rejected"}.issubset(columns):
+            prepared_splits[split_name] = split_data.map(
+                partial(format_instruction_as_prompt, template=template),
+                **map_kwargs,
+            )
+            continue
+
+        if {"question", "chosen", "rejected"}.issubset(columns):
+            prepared_splits[split_name] = split_data.map(
+                format_qa_as_prompt,
+                **map_kwargs,
+            )
+            continue
+
+        raise ValueError(
+            f"Split '{split_name}' must contain prompt/chosen/rejected columns, or "
+            "instruction/question columns together with chosen/rejected."
         )
 
-    if config.validation_split in prepared_dataset and config.max_eval_samples:
-        eval_dataset = shuffle_dataset_split(
-            prepared_dataset[config.validation_split], shuffle_seed
-        )
-        prepared_dataset[config.validation_split] = eval_dataset.select(
-            range(min(config.max_eval_samples, len(prepared_dataset[config.validation_split])))
+    return _apply_sample_limits(DatasetDict(prepared_splits), config, shuffle_seed)
+
+
+def prepare_grpo_dataset_for_trl(
+    dataset: DatasetDict,
+    config: DataConfig,
+    shuffle_seed: Optional[int] = None,
+) -> DatasetDict:
+    template = config.prompt_template or DEFAULT_PROMPT_TEMPLATE
+    prepared_splits = {}
+
+    for split_name, split_data in dataset.items():
+        columns = split_data.column_names
+        if "prompt" in columns:
+            prepared_splits[split_name] = split_data
+            continue
+
+        map_kwargs = {}
+        if isinstance(split_data, Dataset):
+            map_kwargs["num_proc"] = config.preprocessing_num_workers
+
+        if config.text_column in columns:
+            prepared_splits[split_name] = split_data.map(
+                lambda example, text_column=config.text_column: {"prompt": example[text_column]},
+                **map_kwargs,
+            )
+            continue
+
+        if "instruction" in columns:
+            prepared_splits[split_name] = split_data.map(
+                partial(format_instruction_as_prompt, template=template),
+                **map_kwargs,
+            )
+            continue
+
+        if "question" in columns:
+            prepared_splits[split_name] = split_data.map(
+                format_qa_as_prompt,
+                **map_kwargs,
+            )
+            continue
+
+        raise ValueError(
+            f"Split '{split_name}' must contain a prompt column, the configured text column "
+            f"'{config.text_column}', or instruction/question fields."
         )
 
-    return prepared_dataset
+    return _apply_sample_limits(DatasetDict(prepared_splits), config, shuffle_seed)
 
 
 def preprocess_text_dataset(

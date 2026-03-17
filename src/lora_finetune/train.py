@@ -24,6 +24,8 @@ hf_set_seed = None
 get_text_collator = None
 get_text_classification_collator = None
 load_text_dataset = None
+prepare_grpo_dataset_for_trl = None
+prepare_preference_dataset_for_trl = None
 prepare_text_dataset_for_trl = None
 preprocess_text_dataset = None
 preprocess_text_classification_dataset = None
@@ -50,7 +52,8 @@ prepare_model_for_training = None
 def _ensure_runtime_imports():
     global hf_set_seed
     global get_text_collator, get_text_classification_collator
-    global load_text_dataset, prepare_text_dataset_for_trl
+    global load_text_dataset, prepare_grpo_dataset_for_trl, prepare_preference_dataset_for_trl
+    global prepare_text_dataset_for_trl
     global preprocess_text_dataset, preprocess_text_classification_dataset
     global requires_trl_native_dataset
     global get_vision_collator, load_vision_dataset, preprocess_vision_dataset
@@ -72,6 +75,8 @@ def _ensure_runtime_imports():
             get_text_collator,
             get_text_classification_collator,
             load_text_dataset,
+            prepare_grpo_dataset_for_trl,
+            prepare_preference_dataset_for_trl,
             prepare_text_dataset_for_trl,
             preprocess_text_dataset,
             preprocess_text_classification_dataset,
@@ -86,6 +91,12 @@ def _ensure_runtime_imports():
         )
         from .data.text_data import (
             load_text_dataset as imported_load_text_dataset,
+        )
+        from .data.text_data import (
+            prepare_grpo_dataset_for_trl as imported_prepare_grpo_dataset_for_trl,
+        )
+        from .data.text_data import (
+            prepare_preference_dataset_for_trl as imported_prepare_preference_dataset_for_trl,
         )
         from .data.text_data import (
             prepare_text_dataset_for_trl as imported_prepare_text_dataset_for_trl,
@@ -106,6 +117,10 @@ def _ensure_runtime_imports():
             get_text_classification_collator = imported_get_text_classification_collator
         if load_text_dataset is None:
             load_text_dataset = imported_load_text_dataset
+        if prepare_grpo_dataset_for_trl is None:
+            prepare_grpo_dataset_for_trl = imported_prepare_grpo_dataset_for_trl
+        if prepare_preference_dataset_for_trl is None:
+            prepare_preference_dataset_for_trl = imported_prepare_preference_dataset_for_trl
         if prepare_text_dataset_for_trl is None:
             prepare_text_dataset_for_trl = imported_prepare_text_dataset_for_trl
         if preprocess_text_dataset is None:
@@ -279,6 +294,13 @@ def _run_trainer_training(trainer, resume_from_checkpoint=None) -> None:
 def train_llm(config: Config) -> None:
     """Train a language model with LoRA."""
     _ensure_runtime_imports()
+    trainer_type = config.training.trainer_type
+    if config.model.use_unsloth and trainer_type != "sft":
+        raise ValueError("Unsloth is currently only supported with training.trainer_type='sft'")
+    if config.benchmark_eval.enabled and trainer_type != "sft":
+        raise ValueError(
+            "benchmark_eval is currently only supported with training.trainer_type='sft'"
+        )
     wh = get_warning_handler()
     if wh is not None:
         wh.start_buffering()
@@ -318,10 +340,24 @@ def train_llm(config: Config) -> None:
         wh.start_buffering()
     with Status("[bold blue]Loading dataset...", console=console):
         dataset = load_text_dataset(config.data)
-        use_trl_native_dataset = config.training.llm_trainer == "trl" and (
-            config.data.append_eos_token or requires_trl_native_dataset(dataset)
+        use_trl_native_dataset = (
+            trainer_type == "sft"
+            and config.training.llm_trainer == "trl"
+            and (config.data.append_eos_token or requires_trl_native_dataset(dataset))
         )
-        if use_trl_native_dataset:
+        if trainer_type == "dpo":
+            prepared_dataset = prepare_preference_dataset_for_trl(
+                dataset,
+                config.data,
+                shuffle_seed=config.training.data_seed,
+            )
+        elif trainer_type == "grpo":
+            prepared_dataset = prepare_grpo_dataset_for_trl(
+                dataset,
+                config.data,
+                shuffle_seed=config.training.data_seed,
+            )
+        elif use_trl_native_dataset:
             prepared_dataset = prepare_text_dataset_for_trl(
                 dataset,
                 config.data,
@@ -343,14 +379,19 @@ def train_llm(config: Config) -> None:
     if config.data.validation_split in prepared_dataset:
         eval_dataset = prepared_dataset[config.data.validation_split]
 
-    data_collator = None if use_trl_native_dataset else get_text_collator(tokenizer)
+    if trainer_type == "sft":
+        data_collator = None if use_trl_native_dataset else get_text_collator(tokenizer)
+    else:
+        data_collator = None
 
-    # Use perplexity metric for LLM evaluation if eval dataset exists
-    compute_metrics = compute_metrics_for_lm if eval_dataset is not None else None
+    if trainer_type == "sft":
+        compute_metrics = compute_metrics_for_lm if eval_dataset is not None else None
+    else:
+        compute_metrics = None
 
     # Create benchmark evaluation callback if enabled
     callbacks = []
-    if config.benchmark_eval.enabled:
+    if config.benchmark_eval.enabled and trainer_type == "sft":
         eval_callback = LightEvalCallback(
             model_name=config.model.model_name_or_path,
             tasks=config.benchmark_eval.tasks,
@@ -370,6 +411,8 @@ def train_llm(config: Config) -> None:
         model_config=config.model,
         train_dataset=train_dataset,
         data_config=config.data,
+        dpo_config=config.dpo,
+        grpo_config=config.grpo,
         benchmark_eval_config=config.benchmark_eval,
         eval_dataset=eval_dataset,
         processing_class=tokenizer,
@@ -389,7 +432,7 @@ def train_llm(config: Config) -> None:
             trainer.push_to_hub()
 
     # Run benchmark evaluation if enabled
-    if config.benchmark_eval.enabled:
+    if config.benchmark_eval.enabled and trainer_type == "sft":
         run_benchmark_eval(model, config.model.model_name_or_path, config.benchmark_eval)
 
 
@@ -639,7 +682,9 @@ def main() -> None:
     table.add_row("Learning rate", str(config.training.learning_rate))
     table.add_row("Gradient checkpointing", "✓" if config.training.gradient_checkpointing else "✗")
     if config.model.model_type == "causal_lm":
-        table.add_row("LLM trainer", config.training.llm_trainer)
+        table.add_row("Trainer type", config.training.trainer_type)
+        if config.training.trainer_type == "sft":
+            table.add_row("LLM trainer", config.training.llm_trainer)
     table.add_row("FSDP", config.training.fsdp or "disabled")
     table.add_row("Output dir", config.training.output_dir)
 

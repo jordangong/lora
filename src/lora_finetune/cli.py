@@ -9,6 +9,8 @@ from .config import (
     BenchmarkEvalConfig,
     Config,
     DataConfig,
+    DPOConfig,
+    GRPOConfig,
     LoraConfig,
     ModelConfig,
     TrainingConfig,
@@ -31,12 +33,8 @@ def _is_list_or_str_union(type_hint: Type) -> bool:
 def _get_base_type(type_hint: Type) -> Type:
     """Extract the base type from Optional or other generic types."""
     origin = get_origin(type_hint)
-    if origin is type(None):
-        return str
-    # Handle Optional[X] which is Union[X, None]
-    if origin is not None:
+    if origin is Union:
         args = get_args(type_hint)
-        # Filter out NoneType
         non_none_args = [a for a in args if a is not type(None)]
         if non_none_args:
             return non_none_args[0]
@@ -185,6 +183,12 @@ def parse_args() -> argparse.Namespace:
     # Training config
     _add_dataclass_args(parser, TrainingConfig)
 
+    # DPO config with "dpo_" prefix
+    _add_dataclass_args(parser, DPOConfig, prefix="dpo_")
+
+    # GRPO config with "grpo_" prefix
+    _add_dataclass_args(parser, GRPOConfig, prefix="grpo_")
+
     # Benchmark evaluation config with "bench_" prefix
     _add_dataclass_args(parser, BenchmarkEvalConfig, prefix="bench_")
 
@@ -244,6 +248,8 @@ def build_config(args: argparse.Namespace) -> Config:
     _apply_args_to_config(config.data, args_dict)
     _apply_args_to_config(config.data.augmentation, args_dict, prefix="aug_")
     _apply_args_to_config(config.training, args_dict)
+    _apply_args_to_config(config.dpo, args_dict, prefix="dpo_")
+    _apply_args_to_config(config.grpo, args_dict, prefix="grpo_")
     _apply_args_to_config(config.benchmark_eval, args_dict, prefix="bench_")
 
     return config

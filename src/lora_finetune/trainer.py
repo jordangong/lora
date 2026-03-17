@@ -4,6 +4,7 @@ import inspect
 import logging
 import math
 import os
+import re
 from dataclasses import asdict
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Union
@@ -30,12 +31,39 @@ from transformers import (
 from transformers.trainer_callback import PrinterCallback, TrainerCallback
 
 try:
-    from trl import SFTConfig, SFTTrainer
+    from trl import (
+        DPOConfig as TRLDPOConfig,
+    )
+    from trl import (
+        DPOTrainer,
+        GRPOTrainer,
+        SFTConfig,
+        SFTTrainer,
+    )
+    from trl import (
+        GRPOConfig as TRLGRPOConfig,
+    )
 except ImportError:
+    TRLDPOConfig = None
+    DPOTrainer = None
+    TRLGRPOConfig = None
+    GRPOTrainer = None
     SFTConfig = None
     SFTTrainer = None
 
-from .config import BenchmarkEvalConfig, DataConfig, LoraConfig, ModelConfig, TrainingConfig
+from .config import (
+    BenchmarkEvalConfig,
+    DataConfig,
+    LoraConfig,
+    ModelConfig,
+    TrainingConfig,
+)
+from .config import (
+    DPOConfig as ProjectDPOConfig,
+)
+from .config import (
+    GRPOConfig as ProjectGRPOConfig,
+)
 from .utils import capture_stdout, console
 
 logger = logging.getLogger(__name__)
@@ -404,6 +432,99 @@ def get_sft_training_arguments(
     return training_args
 
 
+def _build_trl_config_kwargs(
+    config: TrainingConfig,
+    model_config: ModelConfig,
+) -> Dict[str, Any]:
+    return dict(_get_training_arguments_kwargs(config, model_config))
+
+
+def _filter_init_kwargs(init_target: Any, kwargs: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        parameters = inspect.signature(init_target).parameters
+    except (TypeError, ValueError):
+        return kwargs
+    if any(parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in parameters.values()):
+        return kwargs
+    return {key: value for key, value in kwargs.items() if key in parameters}
+
+
+def get_dpo_training_arguments(
+    config: TrainingConfig,
+    model_config: ModelConfig,
+    dpo_config: ProjectDPOConfig,
+    data_config: Optional[DataConfig] = None,
+):
+    if TRLDPOConfig is None:
+        raise ImportError("TRL is required for DPO finetuning. Install it with: pip install trl")
+
+    kwargs = _build_trl_config_kwargs(config, model_config)
+    kwargs.update(
+        {
+            "beta": dpo_config.beta,
+            "max_prompt_length": dpo_config.max_prompt_length,
+            "max_completion_length": dpo_config.max_completion_length,
+            "max_length": dpo_config.max_length,
+            "reference_free": dpo_config.reference_free,
+            "label_smoothing": dpo_config.label_smoothing,
+            "disable_dropout": dpo_config.disable_dropout,
+        }
+    )
+    if data_config is not None:
+        kwargs["dataset_num_proc"] = data_config.preprocessing_num_workers
+        kwargs["max_length"] = dpo_config.max_length or data_config.max_seq_length
+
+    return TRLDPOConfig(**_filter_init_kwargs(TRLDPOConfig.__init__, kwargs))
+
+
+def get_grpo_training_arguments(
+    config: TrainingConfig,
+    model_config: ModelConfig,
+    grpo_config: ProjectGRPOConfig,
+):
+    if TRLGRPOConfig is None:
+        raise ImportError("TRL is required for GRPO finetuning. Install it with: pip install trl")
+
+    kwargs = _build_trl_config_kwargs(config, model_config)
+    kwargs.update(
+        {
+            "remove_unused_columns": False,
+            "max_prompt_length": grpo_config.max_prompt_length,
+            "max_completion_length": grpo_config.max_completion_length,
+            "num_generations": grpo_config.num_generations,
+            "temperature": grpo_config.temperature,
+            "top_p": grpo_config.top_p,
+            "top_k": grpo_config.top_k,
+            "beta": grpo_config.beta,
+            "num_iterations": grpo_config.num_iterations,
+            "epsilon": grpo_config.epsilon,
+            "loss_type": grpo_config.loss_type,
+            "scale_rewards": grpo_config.scale_rewards,
+        }
+    )
+
+    return TRLGRPOConfig(**_filter_init_kwargs(TRLGRPOConfig.__init__, kwargs))
+
+
+def resolve_trainer_type(training_config: TrainingConfig, model_config: ModelConfig) -> str:
+    if model_config.model_type != "causal_lm":
+        if training_config.trainer_type != "sft":
+            raise ValueError(
+                f"training.trainer_type='{training_config.trainer_type}' is only supported for causal_lm models"
+            )
+        return "transformers"
+
+    if training_config.trainer_type == "sft":
+        return "sft" if training_config.llm_trainer == "trl" else "transformers"
+
+    if training_config.llm_trainer != "trl":
+        raise ValueError(
+            f"training.trainer_type='{training_config.trainer_type}' requires training.llm_trainer='trl'"
+        )
+
+    return training_config.trainer_type
+
+
 def _dataset_is_pretokenized(dataset) -> bool:
     try:
         sample = next(iter(dataset))
@@ -448,6 +569,8 @@ def _build_wandb_config_payload(
     model_config: Optional[ModelConfig] = None,
     data_config: Optional[DataConfig] = None,
     lora_config: Optional[LoraConfig] = None,
+    dpo_config: Optional[ProjectDPOConfig] = None,
+    grpo_config: Optional[ProjectGRPOConfig] = None,
     benchmark_eval_config: Optional[BenchmarkEvalConfig] = None,
 ) -> Dict[str, Any]:
     config_payload: Dict[str, Any] = {"training": asdict(training_config)}
@@ -457,6 +580,10 @@ def _build_wandb_config_payload(
         config_payload["data"] = asdict(data_config)
     if lora_config is not None:
         config_payload["lora"] = asdict(lora_config)
+    if dpo_config is not None:
+        config_payload["dpo"] = asdict(dpo_config)
+    if grpo_config is not None:
+        config_payload["grpo"] = asdict(grpo_config)
     if benchmark_eval_config is not None:
         config_payload["benchmark_eval"] = asdict(benchmark_eval_config)
     return _sanitize_wandb_config(config_payload)
@@ -467,6 +594,8 @@ def _sync_wandb_config(
     model_config: Optional[ModelConfig] = None,
     data_config: Optional[DataConfig] = None,
     lora_config: Optional[LoraConfig] = None,
+    dpo_config: Optional[ProjectDPOConfig] = None,
+    grpo_config: Optional[ProjectGRPOConfig] = None,
     benchmark_eval_config: Optional[BenchmarkEvalConfig] = None,
 ) -> None:
     if training_config.report_to != "wandb":
@@ -482,6 +611,8 @@ def _sync_wandb_config(
         model_config=model_config,
         data_config=data_config,
         lora_config=lora_config,
+        dpo_config=dpo_config,
+        grpo_config=grpo_config,
         benchmark_eval_config=benchmark_eval_config,
     )
     try:
@@ -495,6 +626,8 @@ def setup_wandb(
     model_config: Optional[ModelConfig] = None,
     data_config: Optional[DataConfig] = None,
     lora_config: Optional[LoraConfig] = None,
+    dpo_config: Optional[ProjectDPOConfig] = None,
+    grpo_config: Optional[ProjectGRPOConfig] = None,
     benchmark_eval_config: Optional[BenchmarkEvalConfig] = None,
 ) -> Optional[str]:
     """Setup wandb logging and return run name for output directory."""
@@ -516,6 +649,8 @@ def setup_wandb(
         model_config=model_config,
         data_config=data_config,
         lora_config=lora_config,
+        dpo_config=dpo_config,
+        grpo_config=grpo_config,
         benchmark_eval_config=benchmark_eval_config,
     )
 
@@ -530,6 +665,8 @@ def setup_wandb(
         model_config=model_config,
         data_config=data_config,
         lora_config=lora_config,
+        dpo_config=dpo_config,
+        grpo_config=grpo_config,
         benchmark_eval_config=benchmark_eval_config,
     )
 
@@ -677,6 +814,24 @@ else:
     LoraSFTTrainer = None
 
 
+if DPOTrainer is not None:
+
+    class LoraDPOTrainer(LoraTrainerMixin, DPOTrainer):
+        pass
+
+else:
+    LoraDPOTrainer = None
+
+
+if GRPOTrainer is not None:
+
+    class LoraGRPOTrainer(LoraTrainerMixin, GRPOTrainer):
+        pass
+
+else:
+    LoraGRPOTrainer = None
+
+
 def compute_metrics_for_classification(eval_pred: EvalPrediction) -> Dict[str, float]:
     """Compute accuracy metrics for classification tasks."""
     logits, labels = eval_pred
@@ -723,12 +878,102 @@ def compute_metrics_for_lm(eval_pred: EvalPrediction) -> Dict[str, float]:
     return {"perplexity": float(perplexity)}
 
 
+def _completion_to_text(completion: Any) -> str:
+    if isinstance(completion, str):
+        return completion
+    if isinstance(completion, list):
+        parts = []
+        for item in completion:
+            if isinstance(item, dict):
+                content = item.get("content")
+                if content is not None:
+                    parts.append(str(content))
+            else:
+                parts.append(str(item))
+        return "".join(parts)
+    if isinstance(completion, dict):
+        content = completion.get("content")
+        if content is not None:
+            return str(content)
+    return str(completion)
+
+
+def build_grpo_reward_functions(
+    grpo_config: ProjectGRPOConfig,
+) -> List[Callable[..., List[Optional[float]]]]:
+    reward_funcs: List[Callable[..., List[Optional[float]]]] = []
+    reward_regex = re.compile(grpo_config.reward_regex) if grpo_config.reward_regex else None
+
+    for reward_name in grpo_config.reward_funcs:
+        if reward_name == "non_empty":
+
+            def non_empty_reward(completions, **kwargs):
+                return [
+                    1.0 if _completion_to_text(completion).strip() else 0.0
+                    for completion in completions
+                ]
+
+            reward_funcs.append(non_empty_reward)
+            continue
+
+        if reward_name == "length":
+
+            def length_reward(completions, **kwargs):
+                return [
+                    float(len(_completion_to_text(completion).strip()))
+                    for completion in completions
+                ]
+
+            reward_funcs.append(length_reward)
+            continue
+
+        if reward_name == "exact_match":
+
+            def exact_match_reward(completions, **kwargs):
+                references = kwargs.get(grpo_config.reward_column)
+                if references is None:
+                    raise ValueError(
+                        f"GRPO exact_match reward requires dataset column '{grpo_config.reward_column}'"
+                    )
+                return [
+                    1.0
+                    if _completion_to_text(completion).strip() == str(reference).strip()
+                    else 0.0
+                    for completion, reference in zip(completions, references)
+                ]
+
+            reward_funcs.append(exact_match_reward)
+            continue
+
+        if reward_name == "regex":
+            if reward_regex is None:
+                raise ValueError("grpo.reward_regex must be set when using the regex reward")
+
+            def regex_reward(completions, **kwargs):
+                return [
+                    1.0 if reward_regex.search(_completion_to_text(completion)) else 0.0
+                    for completion in completions
+                ]
+
+            reward_funcs.append(regex_reward)
+            continue
+
+        raise ValueError(
+            f"Unsupported GRPO reward function '{reward_name}'. "
+            "Supported values: non_empty, length, exact_match, regex"
+        )
+
+    return reward_funcs
+
+
 def create_trainer(
     model: Union[PreTrainedModel, PeftModel],
     training_config: TrainingConfig,
     model_config: ModelConfig,
     train_dataset,
     data_config: Optional[DataConfig] = None,
+    dpo_config: Optional[ProjectDPOConfig] = None,
+    grpo_config: Optional[ProjectGRPOConfig] = None,
     benchmark_eval_config: Optional[BenchmarkEvalConfig] = None,
     eval_dataset=None,
     processing_class=None,
@@ -751,6 +996,8 @@ def create_trainer(
         model_config=model_config,
         data_config=data_config,
         lora_config=lora_config,
+        dpo_config=dpo_config,
+        grpo_config=grpo_config,
         benchmark_eval_config=benchmark_eval_config,
     )
 
@@ -762,6 +1009,8 @@ def create_trainer(
         model_config=model_config,
         data_config=data_config,
         lora_config=lora_config,
+        dpo_config=dpo_config,
+        grpo_config=grpo_config,
         benchmark_eval_config=benchmark_eval_config,
     )
 
@@ -777,8 +1026,8 @@ def create_trainer(
             logger.info("Eval dataset size: unknown (streaming/iterable dataset)")
 
     train_sample = _get_dataset_sample(train_dataset)
-    use_trl_sft = training_config.llm_trainer == "trl" and model_config.model_type == "causal_lm"
-    if use_trl_sft:
+    trainer_type = resolve_trainer_type(training_config, model_config)
+    if trainer_type == "sft":
         if LoraSFTTrainer is None or SFTConfig is None:
             raise ImportError(
                 "TRL is required for causal LM finetuning. Install it with: pip install trl"
@@ -799,6 +1048,29 @@ def create_trainer(
         ):
             training_args.assistant_only_loss = True
         logger.info("Using TRL SFTTrainer for causal LM finetuning")
+    elif trainer_type == "dpo":
+        if dpo_config is None or LoraDPOTrainer is None or TRLDPOConfig is None:
+            raise ImportError(
+                "TRL is required for DPO finetuning. Install it with: pip install trl"
+            )
+        training_args = get_dpo_training_arguments(
+            training_config,
+            model_config,
+            dpo_config=dpo_config,
+            data_config=data_config,
+        )
+        logger.info("Using TRL DPOTrainer for preference finetuning")
+    elif trainer_type == "grpo":
+        if grpo_config is None or LoraGRPOTrainer is None or TRLGRPOConfig is None:
+            raise ImportError(
+                "TRL is required for GRPO finetuning. Install it with: pip install trl"
+            )
+        training_args = get_grpo_training_arguments(
+            training_config,
+            model_config,
+            grpo_config=grpo_config,
+        )
+        logger.info("Using TRL GRPOTrainer for RL finetuning")
     else:
         training_args = get_training_arguments(training_config, model_config)
     logger.info(
@@ -817,27 +1089,61 @@ def create_trainer(
     # Disable default transformers progress bar (we use Rich instead)
     training_args.disable_tqdm = True
 
-    trainer_kwargs = {
-        "model": model,
-        "args": training_args,
-        "train_dataset": train_dataset,
-        "eval_dataset": eval_dataset,
-        "data_collator": data_collator,
-        "callbacks": trainer_callbacks,
-        "compute_metrics": compute_metrics,
-        "lora_config": lora_config,
-    }
-
     with capture_stdout():
-        if use_trl_sft:
+        if trainer_type == "sft":
+            trainer_kwargs = {
+                "model": model,
+                "args": training_args,
+                "train_dataset": train_dataset,
+                "eval_dataset": eval_dataset,
+                "data_collator": data_collator,
+                "callbacks": trainer_callbacks,
+                "compute_metrics": compute_metrics,
+                "lora_config": lora_config,
+            }
             sft_signature = inspect.signature(SFTTrainer.__init__).parameters
             if "processing_class" in sft_signature:
                 trainer_kwargs["processing_class"] = processing_class
             elif "tokenizer" in sft_signature:
                 trainer_kwargs["tokenizer"] = processing_class
             trainer = LoraSFTTrainer(**trainer_kwargs)
+        elif trainer_type == "dpo":
+            trainer_kwargs = {
+                "model": model,
+                "args": training_args,
+                "train_dataset": train_dataset,
+                "eval_dataset": eval_dataset,
+                "callbacks": trainer_callbacks,
+                "compute_metrics": compute_metrics,
+                "lora_config": lora_config,
+                "processing_class": processing_class,
+                "data_collator": data_collator,
+            }
+            trainer = LoraDPOTrainer(**trainer_kwargs)
+        elif trainer_type == "grpo":
+            trainer_kwargs = {
+                "model": model,
+                "args": training_args,
+                "train_dataset": train_dataset,
+                "eval_dataset": eval_dataset,
+                "callbacks": trainer_callbacks,
+                "lora_config": lora_config,
+                "processing_class": processing_class,
+                "reward_funcs": build_grpo_reward_functions(grpo_config),
+            }
+            trainer = LoraGRPOTrainer(**trainer_kwargs)
         else:
-            trainer_kwargs["processing_class"] = processing_class
+            trainer_kwargs = {
+                "model": model,
+                "args": training_args,
+                "train_dataset": train_dataset,
+                "eval_dataset": eval_dataset,
+                "data_collator": data_collator,
+                "callbacks": trainer_callbacks,
+                "compute_metrics": compute_metrics,
+                "lora_config": lora_config,
+                "processing_class": processing_class,
+            }
             trainer = LoraTrainer(**trainer_kwargs)
 
     # Remove default PrinterCallback (we use RichProgressCallback instead)

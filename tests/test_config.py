@@ -10,6 +10,8 @@ from lora_finetune.config import (
     BenchmarkEvalConfig,
     Config,
     DataConfig,
+    DPOConfig,
+    GRPOConfig,
     LoraConfig,
     ModelConfig,
     TrainingConfig,
@@ -287,6 +289,7 @@ class TestTrainingConfig:
         assert config.gradient_checkpointing is True
         assert config.optim == "adamw_torch_fused"
         assert config.wandb_watch == "false"
+        assert config.trainer_type == "sft"
 
     def test_custom_values(self):
         """Test custom training configuration values."""
@@ -327,6 +330,29 @@ class TestBenchmarkEvalConfig:
         assert config.num_samples is None
 
 
+class TestDPOConfig:
+    def test_default_values(self):
+        config = DPOConfig()
+        assert config.beta == 0.1
+        assert config.max_prompt_length == 512
+        assert config.max_length == 1024
+        assert config.reference_free is False
+
+
+class TestGRPOConfig:
+    def test_default_values(self):
+        config = GRPOConfig()
+        assert config.reward_funcs == ["non_empty"]
+        assert config.reward_column == "answer"
+        assert config.num_generations == 4
+
+    def test_requires_reward_functions(self):
+        import pytest
+
+        with pytest.raises(ValueError, match="reward_funcs"):
+            GRPOConfig(reward_funcs=[])
+
+
 class TestConfig:
     """Tests for main Config class."""
 
@@ -337,7 +363,10 @@ class TestConfig:
         assert isinstance(config.lora, LoraConfig)
         assert isinstance(config.data, DataConfig)
         assert isinstance(config.training, TrainingConfig)
+        assert isinstance(config.dpo, DPOConfig)
+        assert isinstance(config.grpo, GRPOConfig)
         assert config.training.llm_trainer == "trl"
+        assert config.training.trainer_type == "sft"
 
     def test_from_yaml(self):
         """Test loading configuration from YAML file."""
@@ -357,8 +386,11 @@ class TestConfig:
             "training": {
                 "output_dir": "./test-output",
                 "num_train_epochs": 1,
+                "trainer_type": "dpo",
                 "llm_trainer": "transformers",
             },
+            "dpo": {"beta": 0.2},
+            "grpo": {"reward_funcs": ["length"]},
         }
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
@@ -374,7 +406,10 @@ class TestConfig:
             assert config.data.max_seq_length == 1024
             assert config.training.output_dir == "./test-output"
             assert config.training.num_train_epochs == 1
+            assert config.training.trainer_type == "dpo"
             assert config.training.llm_trainer == "transformers"
+            assert config.dpo.beta == 0.2
+            assert config.grpo.reward_funcs == ["length"]
         finally:
             os.unlink(temp_path)
 

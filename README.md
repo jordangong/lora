@@ -19,7 +19,7 @@ A flexible Hugging Face-based framework for finetuning language and vision model
   - `full`
 
 - **Training backends**
-  - TRL `SFTTrainer` for `causal_lm` by default
+  - TRL `SFTTrainer`, `DPOTrainer`, and `GRPOTrainer` for `causal_lm`
   - Transformers `Trainer` for vision models and non-TRL paths
 
 - **Performance options**
@@ -131,6 +131,8 @@ uv run lora-train \
 The `configs/` directory currently includes:
 
 - `llama3_lora.yaml`
+- `llama3_dpo.yaml`
+- `llama3_grpo.yaml`
 - `llama3_4bit_lora.yaml`
 - `llama3_dora.yaml`
 - `llama3_adalora.yaml`
@@ -174,8 +176,14 @@ Most non-dict config fields are exposed as CLI flags, including nested benchmark
 
 - **Training fields**
   - `--learning_rate`
+  - `--trainer_type`
   - `--llm_trainer`
   - `--report_to`
+
+- **Trainer-mode fields**
+  - `--dpo_beta`
+  - `--grpo_reward_funcs`
+  - `--grpo_reward_column`
 
 - **Benchmark eval fields**
   - `--bench_enabled`
@@ -207,6 +215,8 @@ The runtime config is composed from:
 - `lora`
 - `data`
 - `training`
+- `dpo`
+- `grpo`
 - `benchmark_eval`
 
 Example:
@@ -239,6 +249,7 @@ data:
 
 training:
   output_dir: ./outputs/llama3-lora
+  trainer_type: sft
   num_train_epochs: 3
   per_device_train_batch_size: 4
   gradient_accumulation_steps: 4
@@ -247,6 +258,13 @@ training:
   llm_trainer: trl
   report_to: wandb
   wandb_watch: false
+
+dpo:
+  beta: 0.1
+
+grpo:
+  reward_funcs:
+    - non_empty
 
 benchmark_eval:
   enabled: true
@@ -274,11 +292,25 @@ Text training supports several dataset layouts.
   - `prompt`
   - `completion`
 
+- **Preference data for DPO**
+  - `prompt`
+  - `chosen`
+  - `rejected`
+  - or `instruction` / optional `input` together with `chosen` / `rejected`
+
 - **Conversational data**
   - `messages`
   - or `conversations`, which is normalized to `messages`
 
 `prompt` / `completion`, `messages`, and `conversations` are intended for the TRL-backed causal LM path.
+
+For GRPO, the training split must provide a `prompt` column or a source column that can be normalized into `prompt`, such as:
+
+- `data.text_column`
+- `instruction` with optional `input`
+- `question`
+
+Additional columns are preserved and can be consumed by custom or built-in GRPO reward functions.
 
 For local files, set `data.train_file` and optionally `data.validation_file`.
 
@@ -292,9 +324,21 @@ When `data.max_train_samples` or `data.max_eval_samples` is set, the split is sh
 
 ## Trainer behavior
 
-- **Causal LM default**
-  - `training.llm_trainer: trl`
-  - Uses TRL `SFTTrainer`
+- **Causal LM supervised path**
+  - `training.trainer_type: sft`
+  - Uses TRL `SFTTrainer` when `training.llm_trainer: trl`
+  - Uses Transformers `Trainer` when `training.llm_trainer: transformers`
+
+- **Causal LM preference path**
+  - `training.trainer_type: dpo`
+  - Requires `training.llm_trainer: trl`
+  - Uses TRL `DPOTrainer`
+
+- **Causal LM RL path**
+  - `training.trainer_type: grpo`
+  - Requires `training.llm_trainer: trl`
+  - Uses TRL `GRPOTrainer`
+  - Built-in reward functions include `non_empty`, `length`, `exact_match`, and `regex`
 
 - **Non-TRL path**
   - Uses Transformers `Trainer`
@@ -329,6 +373,8 @@ Current Unsloth integration is limited to `causal_lm` and supports:
 - `dora`
 - `loraplus`
 - `full`
+
+Unsloth currently supports only `training.trainer_type: sft`.
 
 ### Bitsandbytes
 
@@ -366,6 +412,8 @@ benchmark_eval:
 ```
 
 This runs generation-based benchmark evaluation during training and after training completes.
+
+Benchmark evaluation currently supports only `training.trainer_type: sft`.
 
 ### Weights & Biases
 
