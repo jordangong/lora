@@ -1,6 +1,9 @@
 """Main training script for LoRA finetuning."""
 
+import copy
 import logging
+import os
+from typing import Any
 
 from rich.panel import Panel
 from rich.status import Status
@@ -47,6 +50,8 @@ compute_metrics_for_classification = None
 compute_metrics_for_lm = None
 create_trainer = None
 prepare_model_for_training = None
+run_hyperparameter_search = None
+apply_hpo_parameters_to_config_sections = None
 
 
 def _ensure_runtime_imports():
@@ -63,6 +68,8 @@ def _ensure_runtime_imports():
     global get_num_labels_from_dataset, get_id2label, get_label2id, get_vision_target_modules
     global compute_metrics_for_classification, compute_metrics_for_lm
     global create_trainer, prepare_model_for_training
+    global run_hyperparameter_search
+    global apply_hpo_parameters_to_config_sections
 
     if hf_set_seed is None:
         from transformers import set_seed as imported_hf_set_seed
@@ -225,8 +232,13 @@ def _ensure_runtime_imports():
             compute_metrics_for_lm,
             create_trainer,
             prepare_model_for_training,
+            run_hyperparameter_search,
+            apply_hpo_parameters_to_config_sections,
         )
     ):
+        from .trainer import (
+            apply_hpo_parameters_to_config_sections as imported_apply_hpo_parameters_to_config_sections,
+        )
         from .trainer import (
             compute_metrics_for_classification as imported_compute_metrics_for_classification,
         )
@@ -239,6 +251,9 @@ def _ensure_runtime_imports():
         from .trainer import (
             prepare_model_for_training as imported_prepare_model_for_training,
         )
+        from .trainer import (
+            run_hyperparameter_search as imported_run_hyperparameter_search,
+        )
 
         if compute_metrics_for_classification is None:
             compute_metrics_for_classification = imported_compute_metrics_for_classification
@@ -248,6 +263,12 @@ def _ensure_runtime_imports():
             create_trainer = imported_create_trainer
         if prepare_model_for_training is None:
             prepare_model_for_training = imported_prepare_model_for_training
+        if run_hyperparameter_search is None:
+            run_hyperparameter_search = imported_run_hyperparameter_search
+        if apply_hpo_parameters_to_config_sections is None:
+            apply_hpo_parameters_to_config_sections = (
+                imported_apply_hpo_parameters_to_config_sections
+            )
 
 
 def run_benchmark_eval(model, model_name: str, eval_config: BenchmarkEvalConfig) -> None:
@@ -291,6 +312,53 @@ def _run_trainer_training(trainer, resume_from_checkpoint=None) -> None:
         _cleanup_trainer_callbacks(trainer)
 
 
+def _run_trainer_hpo(trainer, config: Config):
+    try:
+        return run_hyperparameter_search(trainer, config.training, config.hpo)
+    finally:
+        _cleanup_trainer_callbacks(trainer)
+
+
+def _display_hpo_best_run(best_run: Any) -> None:
+    console.print(Panel("[bold blue]Hyperparameter Search Complete[/bold blue]"))
+    table = Table(title="Best Hyperparameter Run")
+    table.add_column("Field", style="cyan")
+    table.add_column("Value", style="green")
+    table.add_row("Run ID", str(getattr(best_run, "run_id", "N/A")))
+    table.add_row("Objective", str(getattr(best_run, "objective", "N/A")))
+    hyperparameters = getattr(best_run, "hyperparameters", {}) or {}
+    for key, value in sorted(hyperparameters.items()):
+        if key in {"assignments", "metric"}:
+            continue
+        table.add_row(key, str(value))
+    sweep_id = getattr(best_run, "run_summary", None)
+    if sweep_id is not None:
+        table.add_row("Sweep ID", str(sweep_id))
+    console.print(table)
+
+
+def _save_hpo_best_config(config: Config, best_run: Any) -> None:
+    _ensure_runtime_imports()
+    hyperparameters = getattr(best_run, "hyperparameters", {}) or {}
+    if not hyperparameters:
+        return
+
+    best_config = copy.deepcopy(config)
+    apply_hpo_parameters_to_config_sections(
+        {
+            "training": best_config.training,
+            "lora": best_config.lora,
+            "dpo": best_config.dpo,
+            "grpo": best_config.grpo,
+        },
+        hyperparameters,
+    )
+    os.makedirs(best_config.training.output_dir, exist_ok=True)
+    best_config_path = os.path.join(best_config.training.output_dir, "best_hpo_config.yaml")
+    best_config.to_yaml(best_config_path)
+    console.print(Panel(f"[bold blue]Saved best HPO config:[/bold blue] {best_config_path}"))
+
+
 def train_llm(config: Config) -> None:
     """Train a language model with LoRA."""
     _ensure_runtime_imports()
@@ -301,10 +369,8 @@ def train_llm(config: Config) -> None:
         raise ValueError(
             "benchmark_eval is currently only supported with training.trainer_type='sft'"
         )
-    wh = get_warning_handler()
-    if wh is not None:
-        wh.start_buffering()
-    with Status("[bold blue]Loading model...", console=console):
+
+    def _build_llm_model_and_tokenizer():
         model, tokenizer = load_model_and_tokenizer(
             config.model,
             max_seq_length=config.data.max_seq_length,
@@ -331,6 +397,13 @@ def train_llm(config: Config) -> None:
         )
 
         model = prepare_model_for_training(model, config.training, tokenizer)
+        return model, tokenizer
+
+    wh = get_warning_handler()
+    if wh is not None:
+        wh.start_buffering()
+    with Status("[bold blue]Loading model...", console=console):
+        model, tokenizer = _build_llm_model_and_tokenizer()
     if wh is not None:
         wh.flush_buffered()
 
@@ -405,6 +478,20 @@ def train_llm(config: Config) -> None:
             f"Benchmark eval ({config.benchmark_eval.tasks}) enabled every {config.benchmark_eval.eval_steps} steps"
         )
 
+    hpo_config_sections = None
+    model_init = None
+    if config.hpo.enabled:
+        hpo_config_sections = {
+            "training": config.training,
+            "lora": config.lora,
+            "dpo": config.dpo,
+            "grpo": config.grpo,
+        }
+
+        def model_init(_trial=None):
+            rebuilt_model, _ = _build_llm_model_and_tokenizer()
+            return rebuilt_model
+
     trainer = create_trainer(
         model=model,
         training_config=config.training,
@@ -420,7 +507,16 @@ def train_llm(config: Config) -> None:
         compute_metrics=compute_metrics,
         lora_config=config.lora,
         callbacks=callbacks if callbacks else None,
+        hpo_config=config.hpo,
+        model_init=model_init,
+        hpo_config_sections=hpo_config_sections,
     )
+
+    if config.hpo.enabled:
+        best_run = _run_trainer_hpo(trainer, config)
+        _display_hpo_best_run(best_run)
+        _save_hpo_best_config(config, best_run)
+        return
 
     _run_trainer_training(trainer, resume_from_checkpoint=config.training.resume_from_checkpoint)
 
@@ -443,18 +539,9 @@ def train_vision(config: Config) -> None:
     if config.training.remove_unused_columns:
         config.training.remove_unused_columns = False
 
-    wh = get_warning_handler()
-    if wh is not None:
-        wh.start_buffering()
-    with Status("[bold blue]Loading dataset...", console=console):
-        dataset = load_vision_dataset(config.data)
-        num_labels = get_num_labels_from_dataset(dataset[config.data.train_split])
-    if wh is not None:
-        wh.flush_buffered()
+    num_labels = None
 
-    if wh is not None:
-        wh.start_buffering()
-    with Status("[bold blue]Loading model...", console=console):
+    def _build_vision_model():
         model, image_processor = load_model_and_tokenizer(config.model, num_labels=num_labels)
 
         if config.lora.target_modules is None or config.lora.target_modules == [
@@ -474,6 +561,21 @@ def train_vision(config: Config) -> None:
         )
 
         model = prepare_model_for_training(model, config.training)
+        return model, image_processor
+
+    wh = get_warning_handler()
+    if wh is not None:
+        wh.start_buffering()
+    with Status("[bold blue]Loading dataset...", console=console):
+        dataset = load_vision_dataset(config.data)
+        num_labels = get_num_labels_from_dataset(dataset[config.data.train_split])
+    if wh is not None:
+        wh.flush_buffered()
+
+    if wh is not None:
+        wh.start_buffering()
+    with Status("[bold blue]Loading model...", console=console):
+        model, image_processor = _build_vision_model()
     if wh is not None:
         wh.flush_buffered()
 
@@ -496,6 +598,20 @@ def train_vision(config: Config) -> None:
     # Use accuracy metric for vision classification
     compute_metrics = compute_metrics_for_classification if eval_dataset is not None else None
 
+    hpo_config_sections = None
+    model_init = None
+    if config.hpo.enabled:
+        hpo_config_sections = {
+            "training": config.training,
+            "lora": config.lora,
+            "dpo": config.dpo,
+            "grpo": config.grpo,
+        }
+
+        def model_init(_trial=None):
+            rebuilt_model, _ = _build_vision_model()
+            return rebuilt_model
+
     trainer = create_trainer(
         model=model,
         training_config=config.training,
@@ -507,7 +623,16 @@ def train_vision(config: Config) -> None:
         data_collator=data_collator,
         compute_metrics=compute_metrics,
         lora_config=config.lora,
+        hpo_config=config.hpo,
+        model_init=model_init,
+        hpo_config_sections=hpo_config_sections,
     )
+
+    if config.hpo.enabled:
+        best_run = _run_trainer_hpo(trainer, config)
+        _display_hpo_best_run(best_run)
+        _save_hpo_best_config(config, best_run)
+        return
 
     _run_trainer_training(trainer, resume_from_checkpoint=config.training.resume_from_checkpoint)
 
@@ -522,21 +647,11 @@ def train_vision(config: Config) -> None:
 def train_text_classification(config: Config) -> None:
     _ensure_runtime_imports()
 
-    wh = get_warning_handler()
-    if wh is not None:
-        wh.start_buffering()
-    with Status("[bold blue]Loading dataset...", console=console):
-        dataset = load_text_dataset(config.data)
-        train_split = dataset[config.data.train_split]
-        num_labels = get_num_labels_from_dataset(train_split, label_column=config.data.label_column)
-        id2label = get_id2label(train_split, label_column=config.data.label_column)
-        label2id = get_label2id(train_split, label_column=config.data.label_column)
-    if wh is not None:
-        wh.flush_buffered()
+    num_labels = None
+    id2label = None
+    label2id = None
 
-    if wh is not None:
-        wh.start_buffering()
-    with Status("[bold blue]Loading model...", console=console):
+    def _build_text_classification_model():
         model, tokenizer = load_model_and_tokenizer(
             config.model,
             num_labels=num_labels,
@@ -562,6 +677,24 @@ def train_text_classification(config: Config) -> None:
         )
 
         model = prepare_model_for_training(model, config.training, tokenizer)
+        return model, tokenizer
+
+    wh = get_warning_handler()
+    if wh is not None:
+        wh.start_buffering()
+    with Status("[bold blue]Loading dataset...", console=console):
+        dataset = load_text_dataset(config.data)
+        train_split = dataset[config.data.train_split]
+        num_labels = get_num_labels_from_dataset(train_split, label_column=config.data.label_column)
+        id2label = get_id2label(train_split, label_column=config.data.label_column)
+        label2id = get_label2id(train_split, label_column=config.data.label_column)
+    if wh is not None:
+        wh.flush_buffered()
+
+    if wh is not None:
+        wh.start_buffering()
+    with Status("[bold blue]Loading model...", console=console):
+        model, tokenizer = _build_text_classification_model()
     if wh is not None:
         wh.flush_buffered()
 
@@ -587,6 +720,20 @@ def train_text_classification(config: Config) -> None:
     data_collator = get_text_classification_collator(tokenizer)
     compute_metrics = compute_metrics_for_classification if eval_dataset is not None else None
 
+    hpo_config_sections = None
+    model_init = None
+    if config.hpo.enabled:
+        hpo_config_sections = {
+            "training": config.training,
+            "lora": config.lora,
+            "dpo": config.dpo,
+            "grpo": config.grpo,
+        }
+
+        def model_init(_trial=None):
+            rebuilt_model, _ = _build_text_classification_model()
+            return rebuilt_model
+
     trainer = create_trainer(
         model=model,
         training_config=config.training,
@@ -599,7 +746,16 @@ def train_text_classification(config: Config) -> None:
         data_collator=data_collator,
         compute_metrics=compute_metrics,
         lora_config=config.lora,
+        hpo_config=config.hpo,
+        model_init=model_init,
+        hpo_config_sections=hpo_config_sections,
     )
+
+    if config.hpo.enabled:
+        best_run = _run_trainer_hpo(trainer, config)
+        _display_hpo_best_run(best_run)
+        _save_hpo_best_config(config, best_run)
+        return
 
     _run_trainer_training(trainer, resume_from_checkpoint=config.training.resume_from_checkpoint)
 
@@ -687,6 +843,11 @@ def main() -> None:
             table.add_row("LLM trainer", config.training.llm_trainer)
     table.add_row("FSDP", config.training.fsdp or "disabled")
     table.add_row("Output dir", config.training.output_dir)
+    if config.hpo.enabled:
+        table.add_row("HPO", "wandb")
+        table.add_row("HPO trials", str(config.hpo.n_trials))
+        if config.hpo.metric_name:
+            table.add_row("HPO metric", config.hpo.metric_name)
 
     # Benchmark evaluation settings
     if config.benchmark_eval.enabled:

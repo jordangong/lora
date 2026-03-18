@@ -1,7 +1,7 @@
 """Configuration dataclasses for LoRA finetuning."""
 
 from dataclasses import dataclass, field
-from typing import List, Literal, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 
 import yaml
 
@@ -409,6 +409,51 @@ class GRPOConfig:
 
 
 @dataclass
+class HPOConfig:
+    enabled: bool = field(default=False, metadata={"help": "Enable hyperparameter search"})
+    backend: Literal["wandb"] = field(
+        default="wandb",
+        metadata={"help": "Hyperparameter search backend"},
+    )
+    method: str = field(default="random", metadata={"help": "W&B sweep search method"})
+    metric_name: Optional[str] = field(
+        default=None,
+        metadata={"help": "Metric name to optimize, e.g. eval_loss or eval_accuracy"},
+    )
+    direction: Literal["minimize", "maximize"] = field(
+        default="minimize",
+        metadata={"help": "Whether to minimize or maximize the objective metric"},
+    )
+    n_trials: int = field(default=20, metadata={"help": "Number of hyperparameter trials to run"})
+    project: Optional[str] = field(
+        default=None,
+        metadata={"help": "Optional W&B project override for hyperparameter search sweeps"},
+    )
+    entity: Optional[str] = field(
+        default=None,
+        metadata={"help": "Optional W&B entity for hyperparameter search sweeps"},
+    )
+    sweep_name: Optional[str] = field(
+        default=None,
+        metadata={"help": "Optional W&B sweep name"},
+    )
+    sweep_id: Optional[str] = field(
+        default=None,
+        metadata={"help": "Existing W&B sweep id to attach to"},
+    )
+    parameters: Optional[Dict[str, Dict[str, Any]]] = field(
+        default=None,
+        metadata={"help": "YAML-defined W&B sweep parameter specification"},
+    )
+
+    def __post_init__(self):
+        if self.n_trials <= 0:
+            raise ValueError("hpo.n_trials must be positive")
+        if self.parameters is not None and not isinstance(self.parameters, dict):
+            raise ValueError("hpo.parameters must be a mapping when provided")
+
+
+@dataclass
 class TrainingConfig:
     """Training configuration."""
 
@@ -539,6 +584,7 @@ class Config:
     training: TrainingConfig = field(default_factory=TrainingConfig)
     dpo: DPOConfig = field(default_factory=DPOConfig)
     grpo: GRPOConfig = field(default_factory=GRPOConfig)
+    hpo: HPOConfig = field(default_factory=HPOConfig)
     benchmark_eval: BenchmarkEvalConfig = field(default_factory=BenchmarkEvalConfig)
 
     @classmethod
@@ -564,6 +610,7 @@ class Config:
         training_config = TrainingConfig(**config_dict.get("training", {}))
         dpo_config = DPOConfig(**config_dict.get("dpo", {}))
         grpo_config = GRPOConfig(**config_dict.get("grpo", {}))
+        hpo_config = HPOConfig(**config_dict.get("hpo", {}))
         benchmark_eval_config = BenchmarkEvalConfig(**config_dict.get("benchmark_eval", {}))
 
         return cls(
@@ -573,6 +620,7 @@ class Config:
             training=training_config,
             dpo=dpo_config,
             grpo=grpo_config,
+            hpo=hpo_config,
             benchmark_eval=benchmark_eval_config,
         )
 
@@ -587,6 +635,7 @@ class Config:
             "training": self.training.__dict__,
             "dpo": self.dpo.__dict__,
             "grpo": self.grpo.__dict__,
+            "hpo": self.hpo.__dict__,
             "benchmark_eval": self.benchmark_eval.__dict__,
         }
         with open(path, "w") as f:
@@ -604,6 +653,7 @@ class Config:
                 "training",
                 "dpo",
                 "grpo",
+                "hpo",
                 "benchmark_eval",
             ]:
                 config_obj = getattr(self, config_name)

@@ -131,6 +131,7 @@ uv run lora-train \
 The `configs/` directory currently includes:
 
 - `llama3_lora.yaml`
+- `llama3_lora_hpo.yaml`
 - `llama3_dpo.yaml`
 - `llama3_grpo.yaml`
 - `llama3_4bit_lora.yaml`
@@ -141,6 +142,7 @@ The `configs/` directory currently includes:
 - `llama3_prefix_tuning.yaml`
 - `llama3_full.yaml`
 - `mistral_lora.yaml`
+- `roberta_text_classification_lora.yaml`
 - `vit_lora.yaml`
 - `fsdp_config.yaml`
 
@@ -185,6 +187,13 @@ Most non-dict config fields are exposed as CLI flags, including nested benchmark
   - `--grpo_reward_funcs`
   - `--grpo_reward_column`
 
+- **HPO fields**
+  - `--hpo_enabled`
+  - `--hpo_n_trials`
+  - `--hpo_metric_name`
+  - `--hpo_direction`
+  - `--hpo_project`
+
 - **Benchmark eval fields**
   - `--bench_enabled`
   - `--bench_tasks`
@@ -217,6 +226,7 @@ The runtime config is composed from:
 - `training`
 - `dpo`
 - `grpo`
+- `hpo`
 - `benchmark_eval`
 
 Example:
@@ -265,6 +275,12 @@ dpo:
 grpo:
   reward_funcs:
     - non_empty
+
+hpo:
+  enabled: false
+  backend: wandb
+  method: random
+  n_trials: 8
 
 benchmark_eval:
   enabled: true
@@ -435,6 +451,74 @@ training:
 ```
 
 `wandb_watch` defaults to `false`.
+
+### Hyperparameter search with W&B
+
+HPO uses Hugging Face `Trainer.hyperparameter_search()` with the W&B backend.
+
+Start from the included example config:
+
+```bash
+uv run lora-train --config configs/llama3_lora_hpo.yaml
+```
+
+Minimal YAML shape:
+
+```yaml
+training:
+  report_to: wandb
+  output_dir: ./outputs/llama3-lora-hpo
+  eval_strategy: steps
+  wandb_project: llama3-lora
+
+data:
+  eval_split_ratio: 0.05
+
+hpo:
+  enabled: true
+  backend: wandb
+  method: random
+  metric_name: eval_loss
+  direction: minimize
+  n_trials: 8
+  parameters:
+    learning_rate:
+      distribution: uniform
+      min: 1.0e-5
+      max: 3.0e-4
+    per_device_train_batch_size:
+      values: [2, 4, 8]
+```
+
+Scalar HPO settings can be overridden from the CLI:
+
+```bash
+uv run lora-train \
+  --config configs/llama3_lora_hpo.yaml \
+  --hpo_n_trials 12 \
+  --hpo_metric_name eval_accuracy \
+  --hpo_direction maximize
+```
+
+Notes:
+
+- **W&B project resolution**
+  - `hpo.project` overrides the sweep project when set.
+  - Otherwise HPO falls back to `training.wandb_project`, then `lora-finetune`.
+
+- **Output layout**
+  - Each HPO trial gets its own subdirectory under `training.output_dir`.
+  - After the sweep completes, the best merged config is written to `best_hpo_config.yaml` in the output directory.
+
+- **Supported sweep parameters**
+  - Transformers-backed trainers support `training.*` and `lora.*` sweep parameters.
+  - TRL-backed `sft`, `dpo`, and `grpo` currently support `training.*` sweep parameters only.
+  - Non-training parameters should use dotted keys such as `lora.r` when supported.
+
+- **Current restrictions**
+  - HPO requires `training.report_to: wandb`.
+  - HPO requires evaluation data so each trial can be scored.
+  - `training.push_to_hub`, `training.resume_from_checkpoint`, and `benchmark_eval.enabled` are not supported during HPO.
 
 ## Multi-GPU training
 

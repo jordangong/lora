@@ -12,6 +12,7 @@ from lora_finetune.config import (
     DataConfig,
     DPOConfig,
     GRPOConfig,
+    HPOConfig,
     LoraConfig,
     ModelConfig,
     TrainingConfig,
@@ -353,6 +354,38 @@ class TestGRPOConfig:
             GRPOConfig(reward_funcs=[])
 
 
+class TestHPOConfig:
+    def test_default_values(self):
+        config = HPOConfig()
+        assert config.enabled is False
+        assert config.backend == "wandb"
+        assert config.method == "random"
+        assert config.metric_name is None
+        assert config.direction == "minimize"
+        assert config.n_trials == 20
+        assert config.parameters is None
+
+    def test_custom_values(self):
+        config = HPOConfig(
+            enabled=True,
+            metric_name="eval_accuracy",
+            direction="maximize",
+            n_trials=8,
+            parameters={"learning_rate": {"values": [1e-4, 2e-4]}},
+        )
+        assert config.enabled is True
+        assert config.metric_name == "eval_accuracy"
+        assert config.direction == "maximize"
+        assert config.n_trials == 8
+        assert config.parameters["learning_rate"]["values"] == [1e-4, 2e-4]
+
+    def test_rejects_non_positive_trial_count(self):
+        import pytest
+
+        with pytest.raises(ValueError, match="n_trials"):
+            HPOConfig(n_trials=0)
+
+
 class TestConfig:
     """Tests for main Config class."""
 
@@ -365,6 +398,7 @@ class TestConfig:
         assert isinstance(config.training, TrainingConfig)
         assert isinstance(config.dpo, DPOConfig)
         assert isinstance(config.grpo, GRPOConfig)
+        assert isinstance(config.hpo, HPOConfig)
         assert config.training.llm_trainer == "trl"
         assert config.training.trainer_type == "sft"
 
@@ -391,6 +425,13 @@ class TestConfig:
             },
             "dpo": {"beta": 0.2},
             "grpo": {"reward_funcs": ["length"]},
+            "hpo": {
+                "enabled": True,
+                "metric_name": "eval_accuracy",
+                "direction": "maximize",
+                "n_trials": 4,
+                "parameters": {"learning_rate": {"values": [1e-4, 2e-4]}},
+            },
         }
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
@@ -410,6 +451,9 @@ class TestConfig:
             assert config.training.llm_trainer == "transformers"
             assert config.dpo.beta == 0.2
             assert config.grpo.reward_funcs == ["length"]
+            assert config.hpo.enabled is True
+            assert config.hpo.metric_name == "eval_accuracy"
+            assert config.hpo.n_trials == 4
         finally:
             os.unlink(temp_path)
 
@@ -446,6 +490,8 @@ class TestConfig:
         config = Config()
         config.model.model_name_or_path = "saved-model"
         config.lora.r = 32
+        config.hpo.enabled = True
+        config.hpo.n_trials = 6
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             temp_path = f.name
@@ -459,6 +505,8 @@ class TestConfig:
 
             assert "saved-model" in content
             assert "r: 32" in content
+            assert "enabled: true" in content
+            assert "n_trials: 6" in content
         finally:
             os.unlink(temp_path)
 
@@ -470,6 +518,8 @@ class TestConfig:
             "r": 64,
             "learning_rate": 5e-5,
             "dataset_name": "new-dataset",
+            "enabled": True,
+            "n_trials": 7,
             "nonexistent_arg": "should_be_ignored",
         }
 
@@ -479,6 +529,8 @@ class TestConfig:
         assert config.lora.r == 64
         assert config.training.learning_rate == 5e-5
         assert config.data.dataset_name == "new-dataset"
+        assert config.hpo.enabled is True
+        assert config.hpo.n_trials == 7
 
     def test_update_from_args_none_values(self):
         """Test that None values in args are ignored."""

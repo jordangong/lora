@@ -15,6 +15,7 @@ from lora_finetune.config import (
     DataConfig,
     DPOConfig,
     GRPOConfig,
+    HPOConfig,
     LoraConfig,
     ModelConfig,
     TrainingConfig,
@@ -774,6 +775,45 @@ class TestLoraTrainer:
         assert hasattr(trainer, "_create_loraplus_optimizer")
         assert callable(trainer._create_loraplus_optimizer)
 
+    def test_lora_trainer_hpo_uses_trial_specific_output_dir(self, monkeypatch):
+        from transformers import TrainingArguments
+
+        recorded = {}
+        original_hp_search_setup = trainer_module.Trainer._hp_search_setup
+
+        def fake_hp_search_setup(self, trial):
+            recorded["trial"] = dict(trial)
+
+        monkeypatch.setattr(trainer_module.Trainer, "_hp_search_setup", fake_hp_search_setup)
+
+        try:
+            model = nn.Linear(10, 5)
+            args = TrainingArguments(
+                output_dir="./test-output",
+                num_train_epochs=1,
+                per_device_train_batch_size=1,
+                report_to="none",
+            )
+            training_config = TrainingConfig(output_dir="./test-output", report_to="wandb")
+            trainer = LoraTrainer(
+                model=model,
+                args=args,
+                train_dataset=None,
+                hpo_config=HPOConfig(enabled=True, n_trials=2),
+                hpo_config_sections={"training": training_config, "lora": LoraConfig()},
+            )
+
+            trainer.state.trial_name = "trial-001"
+            trainer._hp_search_setup({"learning_rate": 1e-5})
+
+            assert recorded["trial"] == {"learning_rate": 1e-5}
+            assert trainer.args.output_dir == os.path.join("./test-output", "trial-001")
+            assert os.path.isdir(trainer.args.output_dir)
+        finally:
+            monkeypatch.setattr(
+                trainer_module.Trainer, "_hp_search_setup", original_hp_search_setup
+            )
+
     def test_lora_trainer_save_model_method_exists(self):
         """Test that save_model method exists."""
         from transformers import TrainingArguments
@@ -951,6 +991,46 @@ class TestSetupWandb:
         assert wandb_module.init_kwargs["config"]["benchmark_eval"]["tasks"] == "gsm8k,mmlu"
         assert wandb_module.config.updates[-1][0]["training"]["hub_token"] == "***REDACTED***"
 
+    def test_setup_wandb_skips_eager_init_for_hpo(self, monkeypatch):
+        wandb_module = ModuleType("wandb")
+        wandb_module.run = None
+        wandb_module.init_called = False
+
+        def init(**kwargs):
+            wandb_module.init_called = True
+
+        wandb_module.init = init
+        monkeypatch.setitem(sys.modules, "wandb", wandb_module)
+
+        training_config = TrainingConfig(report_to="wandb", wandb_watch="all", wandb_log_model=True)
+        hpo_config = HPOConfig(enabled=True, n_trials=3)
+
+        run_name = setup_wandb(training_config, hpo_config=hpo_config)
+
+        assert run_name is None
+        assert wandb_module.init_called is False
+        assert os.environ["WANDB_WATCH"] == "all"
+        assert os.environ["WANDB_LOG_MODEL"] == "true"
+
+    def test_run_hyperparameter_search_falls_back_to_training_wandb_project(self):
+        class FakeTrainer:
+            def __init__(self):
+                self.kwargs = None
+
+            def hyperparameter_search(self, **kwargs):
+                self.kwargs = kwargs
+                return "best-run"
+
+        trainer = FakeTrainer()
+        training_config = TrainingConfig(report_to="wandb", wandb_project="project-from-training")
+        hpo_config = HPOConfig(enabled=True, n_trials=3)
+
+        result = trainer_module.run_hyperparameter_search(trainer, training_config, hpo_config)
+
+        assert result == "best-run"
+        assert trainer.kwargs["project"] == "project-from-training"
+        assert trainer.kwargs["metric"] == "eval/loss"
+
 
 class TestRichProgressCallback:
     """Tests for RichProgressCallback class."""
@@ -1120,6 +1200,48 @@ class TestCreateTrainer:
         )
 
         assert isinstance(trainer, LoraTrainer)
+
+    def test_create_trainer_attaches_model_init_for_hpo(self, monkeypatch):
+        model = nn.Linear(10, 5)
+        training_config = TrainingConfig(
+            output_dir="./test-output",
+            eval_strategy="steps",
+            load_best_model_at_end=False,
+            report_to="wandb",
+            llm_trainer="transformers",
+            bf16=False,
+            fp16=False,
+        )
+        model_config = ModelConfig(model_type="text_classification")
+        hpo_config = HPOConfig(enabled=True, n_trials=2)
+
+        class SimpleDataset(torch.utils.data.Dataset):
+            def __len__(self):
+                return 4
+
+            def __getitem__(self, idx):
+                return {
+                    "input_ids": torch.tensor([1, 2, 3]),
+                    "labels": torch.tensor(1),
+                }
+
+        monkeypatch.setattr(trainer_module, "setup_wandb", lambda *args, **kwargs: None)
+        monkeypatch.setattr(trainer_module, "_sync_wandb_config", lambda *args, **kwargs: None)
+
+        trainer = create_trainer(
+            model=model,
+            training_config=training_config,
+            model_config=model_config,
+            train_dataset=SimpleDataset(),
+            eval_dataset=SimpleDataset(),
+            hpo_config=hpo_config,
+            model_init=lambda trial=None: nn.Linear(10, 5),
+            hpo_config_sections={"training": training_config, "lora": LoraConfig()},
+        )
+
+        assert isinstance(trainer, LoraTrainer)
+        assert callable(trainer.model_init)
+        assert trainer.args.output_dir == "./test-output"
 
     def test_create_trainer_with_lora_config(self):
         """Test create_trainer with LoRA config."""
@@ -1456,6 +1578,52 @@ class TestCreateTrainer:
         assert trainer.processing_class is processing_class
         assert isinstance(trainer.args, FakeDPOConfig)
         assert trainer.args.beta == 0.1
+
+    def test_create_trainer_rejects_non_training_hpo_params_for_trl(self):
+        model = nn.Linear(10, 5)
+        training_config = TrainingConfig(
+            output_dir="./test-output",
+            eval_strategy="steps",
+            load_best_model_at_end=False,
+            report_to="wandb",
+            llm_trainer="trl",
+            trainer_type="dpo",
+            bf16=False,
+            fp16=False,
+        )
+        model_config = ModelConfig(model_type="causal_lm")
+        hpo_config = HPOConfig(
+            enabled=True,
+            parameters={"lora.r": {"values": [8, 16]}},
+        )
+
+        class SimpleDataset(torch.utils.data.Dataset):
+            def __len__(self):
+                return 2
+
+            def __getitem__(self, idx):
+                return {"prompt": "hi", "chosen": "hello", "rejected": "goodbye"}
+
+        with pytest.raises(
+            ValueError, match=r"only training\.\* parameters are currently supported"
+        ):
+            create_trainer(
+                model=model,
+                training_config=training_config,
+                model_config=model_config,
+                train_dataset=SimpleDataset(),
+                eval_dataset=SimpleDataset(),
+                lora_config=LoraConfig(),
+                dpo_config=DPOConfig(),
+                hpo_config=hpo_config,
+                model_init=lambda trial=None: nn.Linear(10, 5),
+                hpo_config_sections={
+                    "training": training_config,
+                    "lora": LoraConfig(),
+                    "dpo": DPOConfig(),
+                    "grpo": GRPOConfig(),
+                },
+            )
 
     def test_create_trainer_uses_grpo_trainer_when_requested(self, monkeypatch):
         model = nn.Linear(10, 5)

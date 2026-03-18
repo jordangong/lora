@@ -19,6 +19,7 @@ from lora_finetune.config import (
     DataConfig,
     DPOConfig,
     GRPOConfig,
+    HPOConfig,
     LoraConfig,
     ModelConfig,
     TrainingConfig,
@@ -144,6 +145,27 @@ class TestAddDataclassArgs:
 
         assert args.dpo_beta == 0.2
         assert args.grpo_reward_funcs == ["length", "exact_match"]
+
+    def test_add_hpo_prefixed_args(self):
+        parser = argparse.ArgumentParser()
+        _add_dataclass_args(parser, HPOConfig, prefix="hpo_")
+
+        args = parser.parse_args(
+            [
+                "--hpo_enabled",
+                "--hpo_n_trials",
+                "7",
+                "--hpo_metric_name",
+                "eval_accuracy",
+                "--hpo_direction",
+                "maximize",
+            ]
+        )
+
+        assert args.hpo_enabled is True
+        assert args.hpo_n_trials == 7
+        assert args.hpo_metric_name == "eval_accuracy"
+        assert args.hpo_direction == "maximize"
 
     def test_boolean_args(self):
         """Test boolean arguments with --flag and --no_flag."""
@@ -439,6 +461,69 @@ class TestBuildConfig:
         assert config.training.trainer_type == "grpo"
         assert config.dpo.beta == 0.2
         assert config.grpo.reward_funcs == ["length", "exact_match"]
+
+    def test_build_config_applies_hpo_args(self):
+        args = argparse.Namespace(
+            config=None,
+            hpo_enabled=True,
+            hpo_n_trials=9,
+            hpo_metric_name="eval_accuracy",
+            hpo_direction="maximize",
+        )
+        args.__dict__.update(
+            {f"lora_{k}": None for k in vars(LoraConfig()).keys() if not k.startswith("_")}
+        )
+        args.__dict__.update(
+            {f"no_lora_{k}": None for k in vars(LoraConfig()).keys() if not k.startswith("_")}
+        )
+        args.__dict__.update({k: None for k in vars(ModelConfig()).keys() if not k.startswith("_")})
+        args.__dict__.update(
+            {f"no_{k}": None for k in vars(ModelConfig()).keys() if not k.startswith("_")}
+        )
+        args.__dict__.update({k: None for k in vars(DataConfig()).keys() if not k.startswith("_")})
+        args.__dict__.update(
+            {f"no_{k}": None for k in vars(DataConfig()).keys() if not k.startswith("_")}
+        )
+        args.__dict__.update(
+            {k: None for k in vars(TrainingConfig()).keys() if not k.startswith("_")}
+        )
+        args.__dict__.update(
+            {f"no_{k}": None for k in vars(TrainingConfig()).keys() if not k.startswith("_")}
+        )
+        args.__dict__.update(
+            {f"dpo_{k}": None for k in vars(DPOConfig()).keys() if not k.startswith("_")}
+        )
+        args.__dict__.update(
+            {f"grpo_{k}": None for k in vars(GRPOConfig()).keys() if not k.startswith("_")}
+        )
+        args.__dict__.update(
+            {
+                f"hpo_{k}": None
+                for k in vars(HPOConfig()).keys()
+                if not k.startswith("_")
+                and k not in {"enabled", "n_trials", "metric_name", "direction"}
+            }
+        )
+        args.__dict__.update(
+            {f"no_hpo_{k}": None for k in vars(HPOConfig()).keys() if not k.startswith("_")}
+        )
+        args.__dict__.update(
+            {f"aug_{k}": None for k in vars(AugmentationConfig()).keys() if not k.startswith("_")}
+        )
+        args.__dict__.update(
+            {
+                f"no_aug_{k}": None
+                for k in vars(AugmentationConfig()).keys()
+                if not k.startswith("_")
+            }
+        )
+
+        config = build_config(args)
+
+        assert config.hpo.enabled is True
+        assert config.hpo.n_trials == 9
+        assert config.hpo.metric_name == "eval_accuracy"
+        assert config.hpo.direction == "maximize"
 
     def test_build_config_from_yaml(self):
         """Test building config from YAML file."""

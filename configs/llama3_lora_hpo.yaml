@@ -1,0 +1,87 @@
+model:
+  model_name_or_path: meta-llama/Meta-Llama-3-8B
+  model_type: causal_lm
+  use_unsloth: false
+  torch_dtype: bfloat16
+  trust_remote_code: false
+  use_flash_attention_2: true
+  load_in_4bit: false
+  load_in_8bit: false
+  bnb_4bit_compute_dtype: bfloat16
+  bnb_4bit_quant_type: nf4
+  bnb_4bit_use_double_quant: true
+
+lora:
+  method: lora
+  r: 16
+  alpha: 32
+  dropout: 0.05
+  target_modules:
+    - q_proj
+    - k_proj
+    - v_proj
+    - o_proj
+    - gate_proj
+    - up_proj
+    - down_proj
+  bias: none
+
+data:
+  dataset_name: tatsu-lab/alpaca
+  text_column: text
+  max_seq_length: 2048
+  preprocessing_num_workers: 4
+  eval_split_ratio: 0.05
+  response_only_loss: true
+  append_eos_token: true
+
+training:
+  output_dir: ./outputs/llama3-lora-hpo
+  num_train_epochs: 3
+  per_device_train_batch_size: 4
+  per_device_eval_batch_size: 4
+  gradient_accumulation_steps: 4
+  learning_rate: 2.0e-4
+  weight_decay: 0.01
+  warmup_ratio: 0.03
+  max_grad_norm: 1.0
+  lr_scheduler_type: cosine
+  logging_steps: 10
+  save_steps: 500
+  eval_steps: 500
+  eval_strategy: steps
+  save_total_limit: 2
+  load_best_model_at_end: false
+  prediction_loss_only: true
+  bf16: true
+  fp16: false
+  gradient_checkpointing: true
+  llm_trainer: trl
+  trainer_type: sft
+  optim: adamw_torch_fused
+  seed: 42
+  dataloader_num_workers: 4
+  report_to: wandb
+  wandb_project: llama3-lora-hpo
+
+hpo:
+  enabled: true
+  backend: wandb
+  method: random
+  metric_name: eval_loss
+  direction: minimize
+  n_trials: 8
+  sweep_name: llama3-lora-hpo
+  parameters:
+    learning_rate:
+      distribution: uniform
+      min: 1.0e-5
+      max: 3.0e-4
+    per_device_train_batch_size:
+      values: [2, 4, 8]
+    gradient_accumulation_steps:
+      values: [1, 2, 4, 8]
+    warmup_ratio:
+      distribution: uniform
+      min: 0.0
+      max: 0.1

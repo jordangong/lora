@@ -11,6 +11,7 @@ from .config import (
     DataConfig,
     DPOConfig,
     GRPOConfig,
+    HPOConfig,
     LoraConfig,
     ModelConfig,
     TrainingConfig,
@@ -189,6 +190,9 @@ def parse_args() -> argparse.Namespace:
     # GRPO config with "grpo_" prefix
     _add_dataclass_args(parser, GRPOConfig, prefix="grpo_")
 
+    # HPO config with "hpo_" prefix
+    _add_dataclass_args(parser, HPOConfig, prefix="hpo_")
+
     # Benchmark evaluation config with "bench_" prefix
     _add_dataclass_args(parser, BenchmarkEvalConfig, prefix="bench_")
 
@@ -250,6 +254,7 @@ def build_config(args: argparse.Namespace) -> Config:
     _apply_args_to_config(config.training, args_dict)
     _apply_args_to_config(config.dpo, args_dict, prefix="dpo_")
     _apply_args_to_config(config.grpo, args_dict, prefix="grpo_")
+    _apply_args_to_config(config.hpo, args_dict, prefix="hpo_")
     _apply_args_to_config(config.benchmark_eval, args_dict, prefix="bench_")
 
     return config
