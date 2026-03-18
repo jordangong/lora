@@ -1073,21 +1073,51 @@ class TestRichProgressCallback:
             "  [bold]Train[/bold] @ epoch 1.50: [cyan]loss[/cyan]=0.1234  [cyan]learning_rate[/cyan]=1.00e-04"
         ]
 
+    def test_on_log_prints_train_summary_to_progress_console_when_active(self):
+        """Test on_log prefers the live progress console while progress is active."""
+        callback = RichProgressCallback()
+        printed = []
+
+        class FakeConsole:
+            def print(self, message):
+                printed.append(message)
+
+        class FakeProgress:
+            def __init__(self):
+                self.console = FakeConsole()
+
+        class FakeState:
+            epoch = 1.5
+
+        callback.progress = FakeProgress()
+
+        callback.on_log(
+            args=None,
+            state=FakeState(),
+            control=None,
+            logs={"epoch": 1.5, "loss": 0.1234, "learning_rate": 1.0e-4},
+        )
+
+        assert printed == [
+            "  [bold]Train[/bold] @ epoch 1.50: [cyan]loss[/cyan]=0.1234  [cyan]learning_rate[/cyan]=1.00e-04"
+        ]
+
     def test_on_evaluate_handles_string_epoch(self, monkeypatch):
         """Test on_evaluate does not fail when epoch is a string."""
         callback = RichProgressCallback()
         printed = []
 
+        class FakeConsole:
+            def print(self, message):
+                printed.append(message)
+
         class FakeProgress:
             def __init__(self):
+                self.console = FakeConsole()
                 self.removed_tasks = []
 
             def remove_task(self, task_id):
                 self.removed_tasks.append(task_id)
-
-        monkeypatch.setattr(
-            trainer_module.console, "print", lambda message: printed.append(message)
-        )
 
         callback.progress = FakeProgress()
         callback.eval_task = 7
@@ -1108,8 +1138,13 @@ class TestRichProgressCallback:
         callback = RichProgressCallback()
         printed = []
 
+        class FakeConsole:
+            def print(self, message):
+                printed.append(message)
+
         class FakeProgress:
             def __init__(self):
+                self.console = FakeConsole()
                 self.removed_tasks = []
 
             def remove_task(self, task_id):
@@ -1117,10 +1152,6 @@ class TestRichProgressCallback:
 
         class FakeState:
             epoch = 2.0
-
-        monkeypatch.setattr(
-            trainer_module.console, "print", lambda message: printed.append(message)
-        )
 
         callback.progress = FakeProgress()
         callback.eval_task = 9

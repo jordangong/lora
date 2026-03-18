@@ -116,6 +116,12 @@ class RichProgressCallback(TrainerCallback):
         except (TypeError, ValueError):
             return str(epoch)
 
+    def _print_summary(self, message: str) -> None:
+        summary_console = console
+        if self.progress is not None and getattr(self.progress, "console", None) is not None:
+            summary_console = self.progress.console
+        summary_console.print(message)
+
     def on_train_begin(self, args, state, control, model=None, **kwargs):
         """Initialize progress bar at training start."""
         # Show GPU memory now that model is on device
@@ -181,7 +187,7 @@ class RichProgressCallback(TrainerCallback):
 
         epoch = logs.get("epoch", state.epoch or 0)
         if parts:
-            console.print(
+            self._print_summary(
                 f"  [bold]Train[/bold] @ epoch {self._format_epoch(epoch)}: " + "  ".join(parts)
             )
 
@@ -214,7 +220,7 @@ class RichProgressCallback(TrainerCallback):
 
         epoch = metrics.get("epoch", state.epoch if state is not None else "?")
         if parts:
-            console.print(
+            self._print_summary(
                 f"  [bold]Eval[/bold] @ epoch {self._format_epoch(epoch)}: " + "  ".join(parts)
             )
 
