@@ -18,7 +18,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-console = Console(file=sys.stdout)
+console = Console()
 
 _capture_logger = logging.getLogger(__name__ + ".captured_stdout")
 
