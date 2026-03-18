@@ -869,6 +869,7 @@ class TestSetupWandb:
         assert run_name == "dummy-run"
         assert os.environ["WANDB_WATCH"] == "false"
         assert os.environ["WANDB_LOG_MODEL"] == "false"
+        assert os.environ["WANDB_CONSOLE"] == "off"
 
     def test_setup_wandb_preserves_explicit_watch_settings(self, monkeypatch):
         """Test that setup_wandb keeps explicit watch and log-model settings."""
@@ -897,6 +898,7 @@ class TestSetupWandb:
         assert wandb_module.init_kwargs["name"] == "test-run"
         assert os.environ["WANDB_WATCH"] == "all"
         assert os.environ["WANDB_LOG_MODEL"] == "true"
+        assert os.environ["WANDB_CONSOLE"] == "off"
 
     def test_setup_wandb_logs_full_config_sections_and_redacts_sensitive_values(self, monkeypatch):
         wandb_module = ModuleType("wandb")
@@ -1081,6 +1083,79 @@ class TestRichProgressCallback:
         assert callback.eval_task is None
         assert callback.progress.removed_tasks == [9]
         assert printed == ["  [bold]Eval[/bold] @ epoch 2.00: [green]loss[/green]=0.8464"]
+
+    def test_on_log_forwards_summary_to_wandb(self, monkeypatch):
+        """Test on_log forwards stable training summaries to W&B."""
+        callback = RichProgressCallback()
+        printed = []
+        forwarded = []
+
+        class FakeConsole:
+            def print(self, message):
+                printed.append(message)
+
+        class FakeProgress:
+            def __init__(self):
+                self.console = FakeConsole()
+
+        class FakeState:
+            epoch = 2.92
+
+        monkeypatch.setattr(trainer_module, "log_wandb_console", forwarded.append)
+        callback.progress = FakeProgress()
+
+        callback.on_log(
+            args=None,
+            state=FakeState(),
+            control=None,
+            logs={"loss": 0.5449, "grad_norm": 1.3754, "epoch": 2.92},
+        )
+
+        expected = (
+            "  [bold]Train[/bold] @ epoch 2.92: "
+            "[cyan]loss[/cyan]=0.5449  [cyan]grad_norm[/cyan]=1.3754"
+        )
+        assert printed == [expected]
+        assert forwarded == [expected]
+
+    def test_on_train_end_forwards_completion_summary_to_wandb(self, monkeypatch):
+        """Test on_train_end forwards final summary lines to W&B."""
+        callback = RichProgressCallback()
+        forwarded = []
+
+        class FakeConsole:
+            def print(self, *args, **kwargs):
+                return None
+
+            def show_cursor(self, show=True):
+                return None
+
+        class FakeState:
+            log_history = [
+                {
+                    "train_runtime": 3661.0,
+                    "train_loss": 0.4321,
+                    "train_samples_per_second": 12.34,
+                    "total_flos": 5.67e12,
+                }
+            ]
+            global_step = 321
+            epoch = 3.0
+
+        monkeypatch.setattr(trainer_module, "log_wandb_console", forwarded.append)
+        monkeypatch.setattr(trainer_module, "console", FakeConsole())
+
+        callback.on_train_end(args=None, state=FakeState(), control=None)
+
+        assert forwarded == [
+            "Training Complete",
+            "Training time: 01:01:01",
+            "Final loss: 0.4321",
+            "Samples/second: 12.34",
+            "Total FLOPs: 5.67e+12",
+            "Total steps: 321",
+            "Epochs completed: 3.00",
+        ]
 
 
 class TestCreateTrainer:
