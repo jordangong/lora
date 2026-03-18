@@ -23,7 +23,6 @@ from rich.progress import (
     TimeRemainingColumn,
 )
 from rich.table import Table
-from rich.text import Text
 from transformers import (
     DataCollator,
     EvalPrediction,
@@ -122,25 +121,6 @@ class RichProgressCallback(TrainerCallback):
         if self.progress is not None and getattr(self.progress, "console", None) is not None:
             summary_console = self.progress.console
         summary_console.print(message)
-        if summary_console is not console:
-            self._mirror_summary_to_wandb(message)
-
-    @staticmethod
-    def _mirror_summary_to_wandb(message: str) -> None:
-        try:
-            import wandb
-        except ImportError:
-            return
-
-        run = getattr(wandb, "run", None)
-        console_callback = getattr(run, "_console_callback", None)
-        if console_callback is None:
-            return
-
-        try:
-            console_callback("stdout", Text.from_markup(message).plain + "\n")
-        except Exception:
-            logger.debug("Failed to mirror summary line to wandb console", exc_info=True)
 
     def on_train_begin(self, args, state, control, model=None, **kwargs):
         """Initialize progress bar at training start."""
