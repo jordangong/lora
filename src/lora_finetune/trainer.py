@@ -66,7 +66,7 @@ from .config import (
 from .config import (
     GRPOConfig as ProjectGRPOConfig,
 )
-from .utils import capture_stdout, console
+from .utils import capture_stdout, console, print_gpu_memory_usage
 
 logger = logging.getLogger(__name__)
 _SENSITIVE_WANDB_CONFIG_KEYS = {
@@ -119,7 +119,7 @@ class RichProgressCallback(TrainerCallback):
     def on_train_begin(self, args, state, control, model=None, **kwargs):
         """Initialize progress bar at training start."""
         # Show GPU memory now that model is on device
-        self._print_gpu_memory()
+        print_gpu_memory_usage()
         console.print(Panel("[bold green]Training Started[/bold green]", border_style="green"))
 
         self.max_epochs = args.num_train_epochs
