@@ -1102,6 +1102,47 @@ class TestRichProgressCallback:
             "  [bold]Train[/bold] @ epoch 1.50: [cyan]loss[/cyan]=0.1234  [cyan]learning_rate[/cyan]=1.00e-04"
         ]
 
+    def test_on_log_mirrors_progress_console_summary_to_wandb(self, monkeypatch):
+        """Test on_log mirrors live-console summaries to W&B console capture."""
+        callback = RichProgressCallback()
+        printed = []
+        mirrored = []
+
+        class FakeConsole:
+            def print(self, message):
+                printed.append(message)
+
+        class FakeProgress:
+            def __init__(self):
+                self.console = FakeConsole()
+
+        class FakeRun:
+            def _console_callback(self, stream_name, data):
+                mirrored.append((stream_name, data))
+
+        class FakeState:
+            epoch = 1.5
+
+        wandb_module = ModuleType("wandb")
+        wandb_module.run = FakeRun()
+        monkeypatch.setitem(sys.modules, "wandb", wandb_module)
+
+        callback.progress = FakeProgress()
+
+        callback.on_log(
+            args=None,
+            state=FakeState(),
+            control=None,
+            logs={"epoch": 1.5, "loss": 0.1234, "learning_rate": 1.0e-4},
+        )
+
+        assert printed == [
+            "  [bold]Train[/bold] @ epoch 1.50: [cyan]loss[/cyan]=0.1234  [cyan]learning_rate[/cyan]=1.00e-04"
+        ]
+        assert mirrored == [
+            ("stdout", "  Train @ epoch 1.50: loss=0.1234  learning_rate=1.00e-04\n")
+        ]
+
     def test_on_evaluate_handles_string_epoch(self, monkeypatch):
         """Test on_evaluate does not fail when epoch is a string."""
         callback = RichProgressCallback()
