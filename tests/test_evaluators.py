@@ -363,28 +363,3 @@ class TestLightEvalCallback:
             {"benchmark/gsm8k_0|expr_gold_metric": 0.42, "train/global_step": 100},
             step=100,
         )
-
-    @patch("lora_finetune.evaluators.lighteval_evaluator.run_lighteval")
-    def test_on_step_end_prints_benchmark_summary_to_main_console(self, mock_run, monkeypatch):
-        """Test benchmark summaries are printed via the main console."""
-        mock_run.return_value = {"gsm8k_0|expr_gold_metric": 0.42}
-
-        callback = LightEvalCallback(model_name="test-model", eval_steps=100)
-        printed = []
-        monkeypatch.setattr(
-            lighteval_evaluator.console, "print", lambda message: printed.append(message)
-        )
-
-        args = MagicMock()
-        state = MagicMock()
-        state.global_step = 100
-        state.epoch = 1.0
-        control = MagicMock()
-        model = MagicMock()
-        model.training = True
-
-        callback.on_step_end(args, state, control, model=model)
-
-        assert printed == [
-            "  [bold]Benchmark[/bold] @ epoch 1.00: [magenta]gsm8k_0|expr_gold_metric[/magenta]=0.4200"
-        ]

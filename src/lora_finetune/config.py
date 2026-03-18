@@ -509,9 +509,6 @@ class TrainingConfig:
         default="false", metadata={"help": "W&B watch mode: gradients, all, or false"}
     )
     wandb_log_model: bool = field(default=False, metadata={"help": "Log model to W&B"})
-    wandb_console: str = field(
-        default="auto", metadata={"help": "W&B console capture mode: off or auto"}
-    )
     run_name: Optional[str] = field(default=None, metadata={"help": "Run name for logging"})
     fsdp: Optional[str] = field(default=None, metadata={"help": "FSDP configuration string"})
     fsdp_config: Optional[dict] = field(default=None, metadata={"help": "FSDP configuration dict"})

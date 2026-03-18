@@ -289,7 +289,6 @@ class TestTrainingConfig:
         assert config.gradient_checkpointing is True
         assert config.optim == "adamw_torch_fused"
         assert config.wandb_watch == "false"
-        assert config.wandb_console == "auto"
         assert config.trainer_type == "sft"
 
     def test_custom_values(self):
