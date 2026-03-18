@@ -88,7 +88,6 @@ class RichProgressCallback(TrainerCallback):
         self.eval_task = None
         self.max_epochs = 1
         self.in_eval = False
-        self._tty_file = None
 
     @staticmethod
     def _format_epoch(epoch) -> str:
@@ -138,17 +137,11 @@ class RichProgressCallback(TrainerCallback):
 
         self.max_epochs = args.num_train_epochs
         # Use a terminal-only console for the progress bar so that
-        # spinner / bar refreshes are never forwarded to wandb logs.
-        # Opening /dev/tty gives a separate fd that bypasses any
-        # stdout/stderr fd-level redirects wandb may install.
+        # spinner / bar refreshes are never forwarded to wandb logs
+        # (wandb wraps sys.stdout; sys.__stdout__ bypasses that wrapper).
         from rich.console import Console as _Console
 
-        try:
-            self._tty_file = open("/dev/tty", "w")  # noqa: SIM115
-            terminal_console = _Console(file=self._tty_file)
-        except OSError:
-            self._tty_file = None
-            terminal_console = _Console(file=sys.__stdout__)
+        terminal_console = _Console(file=sys.__stdout__)
         self.progress = Progress(
             SpinnerColumn(),
             TextColumn("[bold blue]{task.description}"),
@@ -275,13 +268,6 @@ class RichProgressCallback(TrainerCallback):
                     console.show_cursor(True)
             except Exception:
                 pass
-            tty = self._tty_file
-            self._tty_file = None
-            if tty is not None:
-                try:
-                    tty.close()
-                except Exception:
-                    pass
 
     def on_train_end(self, args, state, control, **kwargs):
         """Clean up progress bar and show final stats."""
