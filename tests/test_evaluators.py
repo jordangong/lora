@@ -365,20 +365,15 @@ class TestLightEvalCallback:
         )
 
     @patch("lora_finetune.evaluators.lighteval_evaluator.run_lighteval")
-    def test_on_step_end_prints_benchmark_summary_via_rich_progress_callback(self, mock_run):
-        """Test benchmark summaries use the rich progress callback summary path when available."""
+    def test_on_step_end_prints_benchmark_summary_to_main_console(self, mock_run, monkeypatch):
+        """Test benchmark summaries are printed via the main console."""
         mock_run.return_value = {"gsm8k_0|expr_gold_metric": 0.42}
 
         callback = LightEvalCallback(model_name="test-model", eval_steps=100)
         printed = []
-
-        class FakeRichProgressCallback:
-            progress = None
-
-            def _print_summary(self, message):
-                printed.append(message)
-
-        callback.rich_progress_callback = FakeRichProgressCallback()
+        monkeypatch.setattr(
+            lighteval_evaluator.console, "print", lambda message: printed.append(message)
+        )
 
         args = MagicMock()
         state = MagicMock()

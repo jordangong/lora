@@ -304,13 +304,7 @@ class LightEvalCallback(TrainerCallback):
         epoch = state.epoch or 0
         metrics_str = "  ".join(f"[magenta]{k}[/magenta]={v:.4f}" for k, v in metrics.items())
         if metrics_str:
-            summary_message = f"  [bold]Benchmark[/bold] @ epoch {epoch:.2f}: {metrics_str}"
-            if self.rich_progress_callback is not None and hasattr(
-                self.rich_progress_callback, "_print_summary"
-            ):
-                self.rich_progress_callback._print_summary(summary_message)
-            else:
-                console.print(summary_message)
+            console.print(f"  [bold]Benchmark[/bold] @ epoch {epoch:.2f}: {metrics_str}")
 
         logger.info(
             f"Benchmark eval @ epoch {epoch:.2f}: "
