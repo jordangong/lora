@@ -5,12 +5,14 @@ import logging
 import math
 import os
 import re
+import sys
 from dataclasses import asdict
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Union
 
 import numpy as np
 from peft import PeftModel
+from rich.console import Console
 from rich.panel import Panel
 from rich.progress import (
     BarColumn,
@@ -78,15 +80,32 @@ _SENSITIVE_WANDB_CONFIG_KEYS = {
 }
 
 
+def _create_live_progress_console(use_separate_stream: bool) -> tuple[Console, Optional[Any]]:
+    if not use_separate_stream:
+        return console, None
+    try:
+        stream = open(
+            "/dev/tty",
+            "w",
+            encoding=getattr(sys.stdout, "encoding", None) or "utf-8",
+            buffering=1,
+        )
+    except OSError:
+        stream = open(os.devnull, "w", encoding="utf-8", buffering=1)
+    return Console(file=stream), stream
+
+
 class RichProgressCallback(TrainerCallback):
     """Rich-based progress display for nicer training output."""
 
-    def __init__(self):
+    def __init__(self, live_console: Optional[Console] = None, live_console_stream: Any = None):
         self.progress = None
         self.train_task = None
         self.eval_task = None
         self.max_epochs = 1
         self.in_eval = False
+        self.live_console = live_console or console
+        self.live_console_stream = live_console_stream
 
     @staticmethod
     def _format_epoch(epoch) -> str:
@@ -96,37 +115,6 @@ class RichProgressCallback(TrainerCallback):
             return f"{float(epoch):.2f}"
         except (TypeError, ValueError):
             return str(epoch)
-
-    def _print_gpu_memory(self):
-        """Print GPU memory usage."""
-        try:
-            import torch
-
-            if not torch.cuda.is_available():
-                return
-
-            table = Table(title="GPU Memory", show_header=True, header_style="bold cyan")
-            table.add_column("GPU", style="dim")
-            table.add_column("Allocated", justify="right")
-            table.add_column("Reserved", justify="right")
-            table.add_column("Free", justify="right", style="green")
-            table.add_column("Total", justify="right")
-
-            for i in range(torch.cuda.device_count()):
-                allocated = torch.cuda.memory_allocated(i) / 1024**3
-                reserved = torch.cuda.memory_reserved(i) / 1024**3
-                total = torch.cuda.get_device_properties(i).total_memory / 1024**3
-                free = total - reserved
-                table.add_row(
-                    f"gpu_{i}",
-                    f"{allocated:.2f} GB",
-                    f"{reserved:.2f} GB",
-                    f"{free:.2f} GB",
-                    f"{total:.2f} GB",
-                )
-            console.print(table)
-        except Exception:
-            pass
 
     def on_train_begin(self, args, state, control, model=None, **kwargs):
         """Initialize progress bar at training start."""
@@ -144,7 +132,7 @@ class RichProgressCallback(TrainerCallback):
             TimeElapsedColumn(),
             TextColumn("•"),
             TimeRemainingColumn(),
-            console=console,
+            console=self.live_console,
             transient=False,
         )
         self.progress.start()
@@ -192,8 +180,8 @@ class RichProgressCallback(TrainerCallback):
                 parts.append(f"[cyan]{key}[/cyan]={value}")
 
         epoch = logs.get("epoch", state.epoch or 0)
-        if parts and self.progress:
-            self.progress.console.print(
+        if parts:
+            console.print(
                 f"  [bold]Train[/bold] @ epoch {self._format_epoch(epoch)}: " + "  ".join(parts)
             )
 
@@ -225,8 +213,8 @@ class RichProgressCallback(TrainerCallback):
                     parts.append(f"[green]{name}[/green]={value:.4f}")
 
         epoch = metrics.get("epoch", state.epoch if state is not None else "?")
-        if self.progress:
-            self.progress.console.print(
+        if parts:
+            console.print(
                 f"  [bold]Eval[/bold] @ epoch {self._format_epoch(epoch)}: " + "  ".join(parts)
             )
 
@@ -245,10 +233,12 @@ class RichProgressCallback(TrainerCallback):
 
     def cleanup(self):
         progress = self.progress
+        live_console_stream = self.live_console_stream
         self.progress = None
         self.train_task = None
         self.eval_task = None
         self.in_eval = False
+        self.live_console_stream = None
 
         try:
             if progress is not None:
@@ -259,6 +249,11 @@ class RichProgressCallback(TrainerCallback):
                     progress.console.show_cursor(True)
                 else:
                     console.show_cursor(True)
+            except Exception:
+                pass
+            try:
+                if live_console_stream is not None:
+                    live_console_stream.close()
             except Exception:
                 pass
 
@@ -641,8 +636,10 @@ def setup_wandb(
         return None
 
     wandb_watch = str(config.wandb_watch).strip().lower() if config.wandb_watch else "false"
+    wandb_console = str(config.wandb_console).strip().lower() if config.wandb_console else "auto"
     os.environ["WANDB_WATCH"] = wandb_watch
     os.environ["WANDB_LOG_MODEL"] = "true" if config.wandb_log_model else "false"
+    os.environ["WANDB_CONSOLE"] = wandb_console
 
     config_payload = _build_wandb_config_payload(
         training_config=config,
@@ -1077,7 +1074,17 @@ def create_trainer(
         f"Training args: epochs={training_args.num_train_epochs}, batch_size={training_args.per_device_train_batch_size}, lr={training_args.learning_rate}"
     )
 
-    rich_progress_callback = RichProgressCallback()
+    use_separate_progress_stream = (
+        training_config.report_to == "wandb"
+        and str(training_config.wandb_console).strip().lower() != "off"
+    )
+    live_progress_console, live_progress_stream = _create_live_progress_console(
+        use_separate_progress_stream
+    )
+    rich_progress_callback = RichProgressCallback(
+        live_console=live_progress_console,
+        live_console_stream=live_progress_stream,
+    )
     trainer_callbacks = [rich_progress_callback]
     if callbacks:
         # Pass RichProgressCallback reference to LightEvalCallback for progress integration

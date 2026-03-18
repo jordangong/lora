@@ -861,6 +861,7 @@ class TestSetupWandb:
         monkeypatch.setitem(sys.modules, "wandb", wandb_module)
         monkeypatch.setenv("WANDB_WATCH", "gradients")
         monkeypatch.setenv("WANDB_LOG_MODEL", "true")
+        monkeypatch.setenv("WANDB_CONSOLE", "auto")
 
         config = TrainingConfig(report_to="wandb")
 
@@ -869,6 +870,7 @@ class TestSetupWandb:
         assert run_name == "dummy-run"
         assert os.environ["WANDB_WATCH"] == "false"
         assert os.environ["WANDB_LOG_MODEL"] == "false"
+        assert os.environ["WANDB_CONSOLE"] == "auto"
 
     def test_setup_wandb_preserves_explicit_watch_settings(self, monkeypatch):
         """Test that setup_wandb keeps explicit watch and log-model settings."""
@@ -889,6 +891,7 @@ class TestSetupWandb:
             wandb_run_name="test-run",
             wandb_watch="all",
             wandb_log_model=True,
+            wandb_console="auto",
         )
 
         run_name = setup_wandb(config)
@@ -897,6 +900,7 @@ class TestSetupWandb:
         assert wandb_module.init_kwargs["name"] == "test-run"
         assert os.environ["WANDB_WATCH"] == "all"
         assert os.environ["WANDB_LOG_MODEL"] == "true"
+        assert os.environ["WANDB_CONSOLE"] == "auto"
 
     def test_setup_wandb_logs_full_config_sections_and_redacts_sensitive_values(self, monkeypatch):
         wandb_module = ModuleType("wandb")
@@ -1017,22 +1021,44 @@ class TestRichProgressCallback:
         assert RichProgressCallback._format_epoch("?") == "?"
         assert RichProgressCallback._format_epoch("1.5") == "1.50"
 
-    def test_on_evaluate_handles_string_epoch(self):
+    def test_on_log_prints_train_summary_to_main_console(self, monkeypatch):
+        """Test on_log writes train summaries via the main console."""
+        callback = RichProgressCallback()
+        printed = []
+
+        class FakeState:
+            epoch = 1.5
+
+        monkeypatch.setattr(
+            trainer_module.console, "print", lambda message: printed.append(message)
+        )
+
+        callback.on_log(
+            args=None,
+            state=FakeState(),
+            control=None,
+            logs={"epoch": 1.5, "loss": 0.1234, "learning_rate": 1.0e-4},
+        )
+
+        assert printed == [
+            "  [bold]Train[/bold] @ epoch 1.50: [cyan]loss[/cyan]=0.1234  [cyan]learning_rate[/cyan]=1.00e-04"
+        ]
+
+    def test_on_evaluate_handles_string_epoch(self, monkeypatch):
         """Test on_evaluate does not fail when epoch is a string."""
         callback = RichProgressCallback()
         printed = []
 
-        class FakeConsole:
-            def print(self, message):
-                printed.append(message)
-
         class FakeProgress:
             def __init__(self):
-                self.console = FakeConsole()
                 self.removed_tasks = []
 
             def remove_task(self, task_id):
                 self.removed_tasks.append(task_id)
+
+        monkeypatch.setattr(
+            trainer_module.console, "print", lambda message: printed.append(message)
+        )
 
         callback.progress = FakeProgress()
         callback.eval_task = 7
@@ -1048,18 +1074,13 @@ class TestRichProgressCallback:
         assert callback.progress.removed_tasks == [7]
         assert printed == ["  [bold]Eval[/bold] @ epoch ?: [green]loss[/green]=1.2345"]
 
-    def test_on_evaluate_falls_back_to_state_epoch_when_metrics_omit_epoch(self):
+    def test_on_evaluate_falls_back_to_state_epoch_when_metrics_omit_epoch(self, monkeypatch):
         """Test on_evaluate uses state.epoch when eval metrics omit epoch."""
         callback = RichProgressCallback()
         printed = []
 
-        class FakeConsole:
-            def print(self, message):
-                printed.append(message)
-
         class FakeProgress:
             def __init__(self):
-                self.console = FakeConsole()
                 self.removed_tasks = []
 
             def remove_task(self, task_id):
@@ -1067,6 +1088,10 @@ class TestRichProgressCallback:
 
         class FakeState:
             epoch = 2.0
+
+        monkeypatch.setattr(
+            trainer_module.console, "print", lambda message: printed.append(message)
+        )
 
         callback.progress = FakeProgress()
         callback.eval_task = 9

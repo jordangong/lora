@@ -3,7 +3,6 @@
 import logging
 import os
 import tempfile
-import warnings
 from typing import Any, Dict, Optional
 
 import torch
@@ -304,10 +303,8 @@ class LightEvalCallback(TrainerCallback):
         # Print results to console
         epoch = state.epoch or 0
         metrics_str = "  ".join(f"[magenta]{k}[/magenta]={v:.4f}" for k, v in metrics.items())
-        if self.rich_progress_callback and self.rich_progress_callback.progress:
-            self.rich_progress_callback.progress.console.print(
-                f"  [bold]Benchmark[/bold] @ epoch {epoch:.2f}: {metrics_str}"
-            )
+        if metrics_str:
+            console.print(f"  [bold]Benchmark[/bold] @ epoch {epoch:.2f}: {metrics_str}")
 
         logger.info(
             f"Benchmark eval @ epoch {epoch:.2f}: "
