@@ -814,6 +814,44 @@ class TestLoraTrainer:
                 trainer_module.Trainer, "_hp_search_setup", original_hp_search_setup
             )
 
+    def test_lora_trainer_hpo_ignores_wandb_metadata_keys(self, monkeypatch):
+        from transformers import TrainingArguments
+
+        recorded = {}
+        original_hp_search_setup = trainer_module.Trainer._hp_search_setup
+
+        def fake_hp_search_setup(self, trial):
+            recorded["trial"] = dict(trial)
+
+        monkeypatch.setattr(trainer_module.Trainer, "_hp_search_setup", fake_hp_search_setup)
+
+        try:
+            model = nn.Linear(10, 5)
+            args = TrainingArguments(
+                output_dir="./test-output",
+                num_train_epochs=1,
+                per_device_train_batch_size=1,
+                report_to="none",
+            )
+            training_config = TrainingConfig(output_dir="./test-output", report_to="wandb")
+            trainer = LoraTrainer(
+                model=model,
+                args=args,
+                train_dataset=None,
+                hpo_config=HPOConfig(enabled=True, n_trials=2),
+                hpo_config_sections={"training": training_config, "lora": LoraConfig()},
+            )
+
+            trainer._hp_search_setup(
+                {"_wandb": {"runtime": 1}, "metric": "eval/loss", "learning_rate": 1e-5}
+            )
+
+            assert recorded["trial"] == {"learning_rate": 1e-5}
+        finally:
+            monkeypatch.setattr(
+                trainer_module.Trainer, "_hp_search_setup", original_hp_search_setup
+            )
+
     def test_lora_trainer_save_model_method_exists(self):
         """Test that save_model method exists."""
         from transformers import TrainingArguments

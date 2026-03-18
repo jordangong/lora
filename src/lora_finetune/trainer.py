@@ -78,7 +78,7 @@ _SENSITIVE_WANDB_CONFIG_KEYS = {
     "password",
     "secret",
 }
-_WANDB_HPO_RESERVED_KEYS = {"assignments", "metric"}
+_WANDB_HPO_RESERVED_KEYS = {"_wandb", "assignments", "metric"}
 _SUPPORTED_HPO_CONFIG_SECTIONS = {"training", "lora", "dpo", "grpo"}
 _DISALLOWED_HPO_TRAINING_FIELDS = {
     "deepspeed",
