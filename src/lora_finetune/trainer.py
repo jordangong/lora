@@ -64,7 +64,7 @@ from .config import (
 from .config import (
     GRPOConfig as ProjectGRPOConfig,
 )
-from .utils import capture_stdout, console, log_wandb_console
+from .utils import capture_stdout, console
 
 logger = logging.getLogger(__name__)
 _SENSITIVE_WANDB_CONFIG_KEYS = {
@@ -96,10 +96,6 @@ class RichProgressCallback(TrainerCallback):
             return f"{float(epoch):.2f}"
         except (TypeError, ValueError):
             return str(epoch)
-
-    @staticmethod
-    def _emit_summary(message: str) -> None:
-        log_wandb_console(message)
 
     def _print_gpu_memory(self):
         """Print GPU memory usage."""
@@ -197,11 +193,9 @@ class RichProgressCallback(TrainerCallback):
 
         epoch = logs.get("epoch", state.epoch or 0)
         if parts and self.progress:
-            message = f"  [bold]Train[/bold] @ epoch {self._format_epoch(epoch)}: " + "  ".join(
-                parts
+            self.progress.console.print(
+                f"  [bold]Train[/bold] @ epoch {self._format_epoch(epoch)}: " + "  ".join(parts)
             )
-            self.progress.console.print(message)
-            self._emit_summary(message)
 
     def on_prediction_step(self, args, state, control, eval_dataloader=None, **kwargs):
         """Update eval progress bar during evaluation."""
@@ -232,11 +226,9 @@ class RichProgressCallback(TrainerCallback):
 
         epoch = metrics.get("epoch", state.epoch if state is not None else "?")
         if self.progress:
-            message = f"  [bold]Eval[/bold] @ epoch {self._format_epoch(epoch)}: " + "  ".join(
-                parts
+            self.progress.console.print(
+                f"  [bold]Eval[/bold] @ epoch {self._format_epoch(epoch)}: " + "  ".join(parts)
             )
-            self.progress.console.print(message)
-            self._emit_summary(message)
 
     def on_evaluate_begin(self, args, state, control, **kwargs):
         """Add eval progress bar when evaluation starts."""
@@ -277,15 +269,12 @@ class RichProgressCallback(TrainerCallback):
             table.add_column("Metric", style="bold")
             table.add_column("Value", justify="right", style="cyan")
 
-            train_runtime = None
-            total_flos = None
-            train_loss = None
-            train_samples_per_second = None
-            hours = 0
-            minutes = 0
-            seconds = 0
-
             if state.log_history:
+                train_runtime = None
+                total_flos = None
+                train_loss = None
+                train_samples_per_second = None
+
                 for log in reversed(state.log_history):
                     if "train_runtime" in log:
                         train_runtime = log["train_runtime"]
@@ -315,18 +304,6 @@ class RichProgressCallback(TrainerCallback):
             table.add_row("Total steps", str(state.global_step))
             table.add_row("Epochs completed", self._format_epoch(state.epoch))
 
-            summary_lines = ["Training Complete"]
-            if train_runtime:
-                summary_lines.append(f"Training time: {hours:02d}:{minutes:02d}:{seconds:02d}")
-            if train_loss is not None:
-                summary_lines.append(f"Final loss: {train_loss:.4f}")
-            if train_samples_per_second:
-                summary_lines.append(f"Samples/second: {train_samples_per_second:.2f}")
-            if total_flos:
-                summary_lines.append(f"Total FLOPs: {total_flos:.2e}")
-            summary_lines.append(f"Total steps: {state.global_step}")
-            summary_lines.append(f"Epochs completed: {self._format_epoch(state.epoch)}")
-
             console.print(
                 Panel(
                     table,
@@ -334,8 +311,6 @@ class RichProgressCallback(TrainerCallback):
                     border_style="green",
                 )
             )
-            for line in summary_lines:
-                self._emit_summary(line)
         finally:
             self.cleanup()
 
@@ -668,7 +643,6 @@ def setup_wandb(
     wandb_watch = str(config.wandb_watch).strip().lower() if config.wandb_watch else "false"
     os.environ["WANDB_WATCH"] = wandb_watch
     os.environ["WANDB_LOG_MODEL"] = "true" if config.wandb_log_model else "false"
-    os.environ["WANDB_CONSOLE"] = "off"
 
     config_payload = _build_wandb_config_payload(
         training_config=config,

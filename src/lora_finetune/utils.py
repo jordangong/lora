@@ -23,29 +23,6 @@ console = Console(file=sys.stdout)
 _capture_logger = logging.getLogger(__name__ + ".captured_stdout")
 
 
-def log_wandb_console(message: str) -> None:
-    if not message:
-        return
-    try:
-        message = Text.from_markup(message).plain
-    except Exception:
-        pass
-    try:
-        import wandb
-    except ImportError:
-        return
-    run = getattr(wandb, "run", None)
-    if run is None:
-        return
-    console_callback = getattr(run, "_console_callback", None)
-    if not callable(console_callback):
-        return
-    try:
-        console_callback("stdout", message.rstrip("\n") + "\n")
-    except Exception:
-        return
-
-
 @contextlib.contextmanager
 def capture_stdout():
     """Redirect stdout to capture print() output from third-party libraries.

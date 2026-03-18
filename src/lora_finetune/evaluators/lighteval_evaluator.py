@@ -3,6 +3,7 @@
 import logging
 import os
 import tempfile
+import warnings
 from typing import Any, Dict, Optional
 
 import torch
@@ -15,7 +16,6 @@ from ..utils import (
     WarningRule,
     configure_warning_loggers,
     console,
-    log_wandb_console,
     restore_logger_configuration,
 )
 
@@ -304,10 +304,10 @@ class LightEvalCallback(TrainerCallback):
         # Print results to console
         epoch = state.epoch or 0
         metrics_str = "  ".join(f"[magenta]{k}[/magenta]={v:.4f}" for k, v in metrics.items())
-        message = f"  [bold]Benchmark[/bold] @ epoch {epoch:.2f}: {metrics_str}"
         if self.rich_progress_callback and self.rich_progress_callback.progress:
-            self.rich_progress_callback.progress.console.print(message)
-        log_wandb_console(message)
+            self.rich_progress_callback.progress.console.print(
+                f"  [bold]Benchmark[/bold] @ epoch {epoch:.2f}: {metrics_str}"
+            )
 
         logger.info(
             f"Benchmark eval @ epoch {epoch:.2f}: "

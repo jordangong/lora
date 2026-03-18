@@ -363,31 +363,3 @@ class TestLightEvalCallback:
             {"benchmark/gsm8k_0|expr_gold_metric": 0.42, "train/global_step": 100},
             step=100,
         )
-
-    @patch("wandb.log")
-    @patch("wandb.run", new_callable=lambda: MagicMock)
-    @patch("lora_finetune.evaluators.lighteval_evaluator.run_lighteval")
-    def test_on_step_end_forwards_benchmark_summary_to_wandb_console(
-        self, mock_run, _mock_run_attr, mock_wandb_log, monkeypatch
-    ):
-        """Test that benchmark summaries are explicitly forwarded to W&B console logs."""
-        mock_run.return_value = {"gsm8k_0|expr_gold_metric": 0.42}
-        forwarded = []
-
-        monkeypatch.setattr(lighteval_evaluator, "log_wandb_console", forwarded.append)
-
-        callback = LightEvalCallback(model_name="test-model", eval_steps=100)
-
-        args = MagicMock()
-        state = MagicMock()
-        state.global_step = 100
-        state.epoch = 1.0
-        control = MagicMock()
-        model = MagicMock()
-        model.training = True
-
-        callback.on_step_end(args, state, control, model=model)
-
-        assert forwarded == [
-            "  [bold]Benchmark[/bold] @ epoch 1.00: [magenta]gsm8k_0|expr_gold_metric[/magenta]=0.4200"
-        ]
