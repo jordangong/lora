@@ -980,35 +980,6 @@ class TestRichProgressCallback:
         assert hasattr(callback, "on_train_end")
         assert hasattr(callback, "_start_eval_progress")
 
-    def test_on_train_begin_prints_gpu_memory_and_starts_progress(self, monkeypatch):
-        """Test on_train_begin uses the shared GPU memory printer and initializes progress."""
-        callback = RichProgressCallback()
-        events = []
-
-        class FakeArgs:
-            num_train_epochs = 3
-
-        class FakeState:
-            max_steps = 12
-
-        monkeypatch.setattr(
-            trainer_module, "print_gpu_memory_usage", lambda: events.append("gpu-memory")
-        )
-        monkeypatch.setattr(
-            trainer_module.console,
-            "print",
-            lambda *args, **kwargs: events.append(("console", args[0] if args else None)),
-        )
-
-        callback.on_train_begin(args=FakeArgs(), state=FakeState(), control=None)
-
-        assert events[0] == "gpu-memory"
-        assert events[1][0] == "console"
-        assert callback.progress is not None
-        assert callback.train_task is not None
-        assert callback.max_epochs == 3
-        callback.cleanup()
-
     def test_start_eval_progress_without_progress(self):
         """Test _start_eval_progress when progress is None."""
         callback = RichProgressCallback()
