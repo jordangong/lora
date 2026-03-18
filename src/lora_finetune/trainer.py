@@ -5,7 +5,6 @@ import logging
 import math
 import os
 import re
-import sys
 from dataclasses import asdict
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Union
@@ -136,12 +135,6 @@ class RichProgressCallback(TrainerCallback):
         console.print(Panel("[bold green]Training Started[/bold green]", border_style="green"))
 
         self.max_epochs = args.num_train_epochs
-        # Use a terminal-only console for the progress bar so that
-        # spinner / bar refreshes are never forwarded to wandb logs
-        # (wandb wraps sys.stdout; sys.__stdout__ bypasses that wrapper).
-        from rich.console import Console as _Console
-
-        terminal_console = _Console(file=sys.__stdout__)
         self.progress = Progress(
             SpinnerColumn(),
             TextColumn("[bold blue]{task.description}"),
@@ -151,7 +144,7 @@ class RichProgressCallback(TrainerCallback):
             TimeElapsedColumn(),
             TextColumn("•"),
             TimeRemainingColumn(),
-            console=terminal_console,
+            console=console,
             transient=False,
         )
         self.progress.start()
@@ -650,11 +643,6 @@ def setup_wandb(
     wandb_watch = str(config.wandb_watch).strip().lower() if config.wandb_watch else "false"
     os.environ["WANDB_WATCH"] = wandb_watch
     os.environ["WANDB_LOG_MODEL"] = "true" if config.wandb_log_model else "false"
-    # Use "wrap" mode so wandb only captures writes to the wrapped sys.stdout
-    # object, not all fd-level output.  This lets us route Rich progress-bar
-    # output through sys.__stdout__ (terminal only) while other console output
-    # flows through the wrapper and into wandb logs.
-    os.environ["WANDB_CONSOLE"] = "wrap"
 
     config_payload = _build_wandb_config_payload(
         training_config=config,
