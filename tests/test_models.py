@@ -156,6 +156,7 @@ class TestUnslothIntegration:
                 dtype=None,
                 load_in_4bit=False,
                 load_in_8bit=False,
+                device_map=None,
                 trust_remote_code=False,
                 tokenizer_name=None,
                 **kwargs,
@@ -166,6 +167,7 @@ class TestUnslothIntegration:
                     "dtype": dtype,
                     "load_in_4bit": load_in_4bit,
                     "load_in_8bit": load_in_8bit,
+                    "device_map": device_map,
                     "trust_remote_code": trust_remote_code,
                     "tokenizer_name": tokenizer_name,
                 }
@@ -205,6 +207,7 @@ class TestUnslothIntegration:
         assert captured["kwargs"]["max_seq_length"] == 4096
         assert captured["kwargs"]["dtype"] == torch.bfloat16
         assert captured["kwargs"]["load_in_4bit"] is True
+        assert captured["kwargs"]["device_map"] is None
         assert captured["kwargs"]["tokenizer_name"] is not None
         assert captured["auto_tokenizer_args"]["model_name_or_path"] == "meta-llama/Meta-Llama-3-8B"
         assert captured["auto_tokenizer_args"]["model_max_length"] == 4096
@@ -260,6 +263,7 @@ class TestUnslothIntegration:
                 dtype=None,
                 load_in_4bit=False,
                 load_in_8bit=False,
+                device_map=None,
                 trust_remote_code=False,
                 tokenizer_name=None,
                 **kwargs,
@@ -271,6 +275,7 @@ class TestUnslothIntegration:
                     "dtype": dtype,
                     "load_in_4bit": load_in_4bit,
                     "load_in_8bit": load_in_8bit,
+                    "device_map": device_map,
                     "trust_remote_code": trust_remote_code,
                     "tokenizer_name": tokenizer_name,
                     "config_present": (override_path / "config.json").exists(),
@@ -309,6 +314,7 @@ class TestUnslothIntegration:
 
         assert captured["auto_tokenizer_args"]["model_name_or_path"] == str(local_model_dir)
         assert captured["kwargs"]["model_name"] != str(local_model_dir)
+        assert captured["kwargs"]["device_map"] is None
         assert captured["kwargs"]["tokenizer_name"] is None
         assert captured["kwargs"]["config_present"] is True
         assert captured["kwargs"]["weights_present"] is True

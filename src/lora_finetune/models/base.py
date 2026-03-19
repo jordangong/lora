@@ -213,6 +213,7 @@ def _load_unsloth_model_and_tokenizer(
         "dtype": torch_dtype,
         "load_in_4bit": config.load_in_4bit,
         "load_in_8bit": config.load_in_8bit,
+        "device_map": None,
         "trust_remote_code": config.trust_remote_code,
     }
     if torch_dtype == "auto":
@@ -229,9 +230,14 @@ def _load_unsloth_model_and_tokenizer(
             load_kwargs["tokenizer_name"] = tokenizer_override_dir.name
 
     load_kwargs = {
-        key: value for key, value in load_kwargs.items() if value is not None and value is not False
+        key: value
+        for key, value in load_kwargs.items()
+        if (value is not None and value is not False)
+        or key in {"load_in_4bit", "load_in_8bit", "device_map"}
     } | {
-        key: value for key, value in load_kwargs.items() if key in {"load_in_4bit", "load_in_8bit"}
+        key: value
+        for key, value in load_kwargs.items()
+        if key in {"load_in_4bit", "load_in_8bit", "device_map"}
     }
     load_kwargs = _filter_supported_kwargs(fast_language_model.from_pretrained, load_kwargs)
 
