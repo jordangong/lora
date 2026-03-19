@@ -1,6 +1,6 @@
 # LoRA Finetuning
 
-A flexible Hugging Face-based framework for finetuning language and vision models with LoRA-style adapters, optional quantization, and configurable training backends.
+A flexible Hugging Face-based framework for finetuning language, vision, and text classification models with LoRA-style adapters, optional quantization, and configurable training backends.
 
 ## Features
 
@@ -8,6 +8,7 @@ A flexible Hugging Face-based framework for finetuning language and vision model
   - `causal_lm`
   - `seq2seq`
   - `vision`
+  - `text_classification`
 
 - **Supported finetuning methods**
   - `lora`
@@ -20,7 +21,7 @@ A flexible Hugging Face-based framework for finetuning language and vision model
 
 - **Training backends**
   - TRL `SFTTrainer`, `DPOTrainer`, and `GRPOTrainer` for `causal_lm`
-  - Transformers `Trainer` for vision models and non-TRL paths
+  - Transformers `Trainer` for vision models, text classification models, and non-TRL paths
 
 - **Performance options**
   - Flash Attention 2
@@ -32,7 +33,7 @@ A flexible Hugging Face-based framework for finetuning language and vision model
 
 - **Data handling**
   - Hugging Face datasets or local `json`, `jsonl`, and `csv`
-  - Instruction-style, Q&A, plain text, prompt-completion, and conversation-style data
+  - Instruction-style, Q&A, plain text, text classification, prompt-completion, and conversation-style data
   - Optional response-only / assistant-only loss masking
   - Optional holdout evaluation datasets and benchmark evaluation with `lighteval`
 
@@ -123,6 +124,14 @@ uv run lora-train \
 ```bash
 uv run lora-train \
   --config configs/vit_lora.yaml \
+  --report_to none
+```
+
+### RoBERTa text classification
+
+```bash
+uv run lora-train \
+  --config configs/roberta_text_classification_lora.yaml \
   --report_to none
 ```
 
@@ -290,7 +299,7 @@ benchmark_eval:
 
 ## Data formats
 
-Text training supports several dataset layouts.
+Text and text classification training support several dataset layouts.
 
 - **Plain text**
   - A column matching `data.text_column` (default: `text`)
@@ -303,6 +312,10 @@ Text training supports several dataset layouts.
 - **Question answering**
   - `question`
   - `answer`
+
+- **Text classification**
+  - A text column matching `data.text_column`
+  - A label column matching `data.label_column`
 
 - **Prompt-completion**
   - `prompt`
@@ -559,18 +572,33 @@ lora/
 ├── configs/
 ├── src/lora_finetune/
 │   ├── data/
+│   │   ├── text_classification.py
+│   │   ├── text_data.py
+│   │   ├── text_formatting.py
+│   │   ├── text_preprocessing.py
+│   │   └── vision_data.py
 │   ├── evaluators/
 │   ├── models/
 │   ├── _optional_unsloth.py
 │   ├── cli.py
 │   ├── config.py
 │   ├── train.py
+│   ├── train_modes.py
+│   ├── train_runtime.py
+│   ├── train_support.py
 │   ├── trainer.py
+│   ├── trainer_hpo.py
+│   ├── trainer_metrics.py
+│   ├── trainer_progress.py
 │   └── utils.py
 ├── tests/
 ├── pyproject.toml
 └── README.md
 ```
+
+`train.py` remains the CLI and module entrypoint, while `train_modes.py`, `train_runtime.py`, and `train_support.py` hold the extracted implementation details.
+
+`trainer.py` and `data/text_data.py` remain stable public import surfaces, with focused helpers split into sibling modules.
 
 ## License
 
