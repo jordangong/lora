@@ -1,6 +1,7 @@
 """Tests for training entrypoints."""
 
 import argparse
+from types import SimpleNamespace
 
 import pytest
 from datasets import Dataset, DatasetDict
@@ -18,6 +19,57 @@ from lora_finetune.config import (
 
 
 class TestTrainLlm:
+    def test_run_trainer_hpo_releases_eager_model_before_search(self, monkeypatch):
+        class FakeAccelerator:
+            def __init__(self):
+                self.free_memory_calls = 0
+
+            def free_memory(self):
+                self.free_memory_calls += 1
+
+        trainer = SimpleNamespace(
+            model_init=lambda _: nn.Linear(2, 2),
+            model="eager-model",
+            model_wrapped="wrapped-model",
+            optimizer="optimizer",
+            lr_scheduler="scheduler",
+            accelerator=FakeAccelerator(),
+            callback_handler=SimpleNamespace(callbacks=[]),
+        )
+        config = Config(
+            training=TrainingConfig(output_dir="./test-output", report_to="wandb"),
+            hpo=SimpleNamespace(enabled=True),
+        )
+        released = {}
+
+        def fake_run_hyperparameter_search(current_trainer, training_config, hpo_config):
+            released["trainer"] = current_trainer
+            return "best-run"
+
+        def fake_release_memory(*objects):
+            released["objects"] = objects
+            return [None for _ in objects]
+
+        monkeypatch.setattr(
+            train_module, "run_hyperparameter_search", fake_run_hyperparameter_search
+        )
+        monkeypatch.setattr(train_module, "_cleanup_trainer_callbacks", lambda trainer: None)
+        monkeypatch.setitem(
+            __import__("sys").modules,
+            "accelerate.utils.memory",
+            SimpleNamespace(release_memory=fake_release_memory),
+        )
+
+        result = train_module._run_trainer_hpo(trainer, config)
+
+        assert result == "best-run"
+        assert released["objects"] == ("wrapped-model", "eager-model")
+        assert trainer.model is None
+        assert trainer.model_wrapped is None
+        assert trainer.optimizer is None
+        assert trainer.lr_scheduler is None
+        assert trainer.accelerator.free_memory_calls == 1
+
     def test_train_llm_uses_trl_native_dataset_for_conversational_data_when_eos_append_disabled(
         self, monkeypatch
     ):

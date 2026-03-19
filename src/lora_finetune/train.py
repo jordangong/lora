@@ -1,10 +1,12 @@
 """Main training script for LoRA finetuning."""
 
 import copy
+import gc
 import logging
 import os
 from typing import Any
 
+import torch
 from rich.panel import Panel
 from rich.status import Status
 from rich.table import Table
@@ -314,6 +316,26 @@ def _run_trainer_training(trainer, resume_from_checkpoint=None) -> None:
 
 def _run_trainer_hpo(trainer, config: Config):
     try:
+        if getattr(trainer, "model_init", None) is not None:
+            try:
+                from accelerate.utils.memory import release_memory
+
+                trainer.model_wrapped, trainer.model = release_memory(
+                    getattr(trainer, "model_wrapped", None),
+                    getattr(trainer, "model", None),
+                )
+            except ImportError:
+                trainer.model_wrapped = None
+                trainer.model = None
+                gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            if hasattr(trainer, "optimizer"):
+                trainer.optimizer = None
+            if hasattr(trainer, "lr_scheduler"):
+                trainer.lr_scheduler = None
+            if hasattr(trainer, "accelerator") and trainer.accelerator is not None:
+                trainer.accelerator.free_memory()
         return run_hyperparameter_search(trainer, config.training, config.hpo)
     finally:
         _cleanup_trainer_callbacks(trainer)
@@ -513,6 +535,7 @@ def train_llm(config: Config) -> None:
     )
 
     if config.hpo.enabled:
+        model = None
         best_run = _run_trainer_hpo(trainer, config)
         _display_hpo_best_run(best_run)
         _save_hpo_best_config(config, best_run)
@@ -629,6 +652,7 @@ def train_vision(config: Config) -> None:
     )
 
     if config.hpo.enabled:
+        model = None
         best_run = _run_trainer_hpo(trainer, config)
         _display_hpo_best_run(best_run)
         _save_hpo_best_config(config, best_run)
@@ -752,6 +776,7 @@ def train_text_classification(config: Config) -> None:
     )
 
     if config.hpo.enabled:
+        model = None
         best_run = _run_trainer_hpo(trainer, config)
         _display_hpo_best_run(best_run)
         _save_hpo_best_config(config, best_run)

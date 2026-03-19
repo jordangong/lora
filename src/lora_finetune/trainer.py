@@ -29,6 +29,7 @@ from transformers import (
     Trainer,
     TrainingArguments,
 )
+from transformers.integrations import WandbCallback
 from transformers.trainer_callback import PrinterCallback, TrainerCallback
 
 try:
@@ -148,10 +149,20 @@ def apply_hpo_parameters_to_config_sections(
         setattr(section, field_name, _coerce_config_value(current_value, value))
 
 
-def _configure_wandb_environment(config: TrainingConfig) -> None:
+def _configure_wandb_environment(
+    config: TrainingConfig,
+    hpo_config: Optional[HPOConfig] = None,
+) -> None:
     wandb_watch = str(config.wandb_watch).strip().lower() if config.wandb_watch else "false"
     os.environ["WANDB_WATCH"] = wandb_watch
     os.environ["WANDB_LOG_MODEL"] = "true" if config.wandb_log_model else "false"
+    project_name = _resolve_wandb_project_name(config, hpo_config)
+    if project_name:
+        os.environ["WANDB_PROJECT"] = project_name
+    if hpo_config is not None and hpo_config.entity:
+        os.environ["WANDB_ENTITY"] = hpo_config.entity
+    else:
+        os.environ.pop("WANDB_ENTITY", None)
 
 
 def _resolve_wandb_project_name(
@@ -876,7 +887,7 @@ def setup_wandb(
         logger.warning("wandb not installed. Install with: pip install wandb")
         return None
 
-    _configure_wandb_environment(config)
+    _configure_wandb_environment(config, hpo_config=hpo_config)
 
     config_payload = _build_wandb_config_payload(
         training_config=config,
@@ -913,6 +924,18 @@ def setup_wandb(
     )
 
     return wandb.run.name if wandb.run else None
+
+
+class HPOWandbCallback(WandbCallback):
+    def on_train_begin(self, args, state, control, model=None, **kwargs):
+        if self._wandb is None:
+            return
+        if state.is_hyper_param_search:
+            self._wandb.finish()
+            self._initialized = False
+            args.run_name = None
+        if not self._initialized:
+            self.setup(args, state, model, **kwargs)
 
 
 class LoraTrainerMixin:
@@ -1546,6 +1569,10 @@ def create_trainer(
                 "processing_class": processing_class,
             }
             trainer = LoraTrainer(**trainer_kwargs)
+
+    if hpo_enabled and training_config.report_to == "wandb":
+        trainer.remove_callback(WandbCallback)
+        trainer.add_callback(HPOWandbCallback())
 
     # Remove default PrinterCallback (we use RichProgressCallback instead)
     trainer.remove_callback(PrinterCallback)

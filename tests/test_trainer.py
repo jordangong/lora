@@ -1050,6 +1050,45 @@ class TestSetupWandb:
         assert os.environ["WANDB_WATCH"] == "all"
         assert os.environ["WANDB_LOG_MODEL"] == "true"
 
+    def test_setup_wandb_sets_project_and_entity_env_for_hpo(self, monkeypatch):
+        wandb_module = ModuleType("wandb")
+        wandb_module.run = None
+        wandb_module.init_called = False
+
+        def init(**kwargs):
+            wandb_module.init_called = True
+
+        wandb_module.init = init
+        monkeypatch.setitem(sys.modules, "wandb", wandb_module)
+
+        training_config = TrainingConfig(report_to="wandb", wandb_project="project-from-training")
+        hpo_config = HPOConfig(enabled=True, n_trials=3, entity="entity-from-hpo")
+
+        setup_wandb(training_config, hpo_config=hpo_config)
+
+        assert os.environ["WANDB_PROJECT"] == "project-from-training"
+        assert os.environ["WANDB_ENTITY"] == "entity-from-hpo"
+
+    def test_setup_wandb_clears_stale_entity_env_when_hpo_entity_missing(self, monkeypatch):
+        wandb_module = ModuleType("wandb")
+        wandb_module.run = None
+        wandb_module.init_called = False
+
+        def init(**kwargs):
+            wandb_module.init_called = True
+
+        wandb_module.init = init
+        monkeypatch.setitem(sys.modules, "wandb", wandb_module)
+        monkeypatch.setenv("WANDB_ENTITY", "stale-entity")
+
+        training_config = TrainingConfig(report_to="wandb", wandb_project="project-from-training")
+        hpo_config = HPOConfig(enabled=True, n_trials=3)
+
+        setup_wandb(training_config, hpo_config=hpo_config)
+
+        assert os.environ["WANDB_PROJECT"] == "project-from-training"
+        assert "WANDB_ENTITY" not in os.environ
+
     def test_run_hyperparameter_search_falls_back_to_training_wandb_project(self):
         class FakeTrainer:
             def __init__(self):
@@ -1068,6 +1107,83 @@ class TestSetupWandb:
         assert result == "best-run"
         assert trainer.kwargs["project"] == "project-from-training"
         assert trainer.kwargs["metric"] == "eval/loss"
+
+    def test_hpo_wandb_callback_resets_and_reinitializes_each_trial(self):
+        callback = trainer_module.HPOWandbCallback.__new__(trainer_module.HPOWandbCallback)
+        events = []
+
+        class FakeWandb:
+            def finish(self):
+                events.append("finish")
+
+        def fake_setup(args, state, model, **kwargs):
+            events.append(("setup", args.run_name, state.trial_name, model))
+            callback._initialized = True
+
+        callback._wandb = FakeWandb()
+        callback._initialized = True
+        callback.setup = fake_setup
+
+        args = type("Args", (), {"run_name": "base-run"})()
+        first_state = type("State", (), {"is_hyper_param_search": True, "trial_name": "trial-1"})()
+        second_state = type("State", (), {"is_hyper_param_search": True, "trial_name": "trial-2"})()
+
+        callback.on_train_begin(args, first_state, None, model="model-1")
+        args.run_name = "second-run"
+        callback.on_train_begin(args, second_state, None, model="model-2")
+
+        assert events == [
+            "finish",
+            ("setup", None, "trial-1", "model-1"),
+            "finish",
+            ("setup", None, "trial-2", "model-2"),
+        ]
+        assert args.run_name is None
+
+    def test_create_trainer_replaces_default_wandb_callback_for_hpo(self, monkeypatch):
+        class SimpleDataset:
+            def __len__(self):
+                return 1
+
+            def __getitem__(self, idx):
+                return {
+                    "input_ids": torch.tensor([1, 2, 3]),
+                    "attention_mask": torch.tensor([1, 1, 1]),
+                    "labels": torch.tensor([1, 2, 3]),
+                }
+
+        training_config = TrainingConfig(
+            output_dir="./test-output",
+            eval_strategy="steps",
+            load_best_model_at_end=False,
+            report_to="wandb",
+            llm_trainer="transformers",
+            bf16=False,
+            fp16=False,
+        )
+        model_config = ModelConfig(model_type="causal_lm")
+        model = nn.Linear(3, 3)
+        train_dataset = SimpleDataset()
+        eval_dataset = SimpleDataset()
+
+        monkeypatch.setattr(trainer_module, "setup_wandb", lambda *args, **kwargs: None)
+        monkeypatch.setattr(trainer_module, "_sync_wandb_config", lambda *args, **kwargs: None)
+
+        trainer = create_trainer(
+            model=model,
+            training_config=training_config,
+            model_config=model_config,
+            train_dataset=train_dataset,
+            eval_dataset=eval_dataset,
+            data_collator=lambda features: features,
+            hpo_config=HPOConfig(enabled=True, n_trials=2),
+            model_init=lambda _: nn.Linear(3, 3),
+            hpo_config_sections={"training": training_config, "lora": LoraConfig()},
+        )
+
+        callback_types = [type(cb).__name__ for cb in trainer.callback_handler.callbacks]
+        assert callback_types.count("HPOWandbCallback") == 1
+        assert "WandbCallback" not in callback_types
 
 
 class TestRichProgressCallback:
