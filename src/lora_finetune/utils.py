@@ -170,6 +170,87 @@ def _print_warning_message(msg: str, rich_console: Optional[Console] = None) -> 
     target_console.print(Text(f"  ⚠ {msg}", style="dim yellow"))
 
 
+def _build_wandb_rich_text(string: str, *, prefix: bool = True) -> Text:
+    rendered = Text()
+    lines = string.split("\n") or [""]
+    for index, line in enumerate(lines):
+        if index:
+            rendered.append("\n")
+        if prefix:
+            rendered.append("wandb", style="bold blue")
+            rendered.append(": ")
+        rendered.append_text(Text.from_ansi(line))
+    return rendered
+
+
+def _install_wandb_rich_terminal_logging(
+    rich_console: Optional[Console] = None,
+    wandb_term_module: Optional[object] = None,
+) -> bool:
+    target_console = rich_console or console
+    if wandb_term_module is None:
+        try:
+            from wandb.errors import term as wandb_term_module
+        except ImportError:
+            return False
+
+    original_log = getattr(wandb_term_module, "_lora_finetune_original_log", None)
+    if original_log is None:
+        original_log = wandb_term_module._log
+        setattr(wandb_term_module, "_lora_finetune_original_log", original_log)
+    setattr(wandb_term_module, "_lora_finetune_rich_console", target_console)
+
+    if getattr(wandb_term_module, "_lora_finetune_rich_log_installed", False):
+        return True
+
+    def _rich_wandb_log(
+        string: str = "",
+        newline: bool = True,
+        repeat: bool = True,
+        prefix: bool = True,
+        silent: bool = False,
+        level: int = logging.INFO,
+    ) -> None:
+        silent_mode = silent or getattr(wandb_term_module, "_silent", False)
+        if silent_mode:
+            return original_log(
+                string,
+                newline=newline,
+                repeat=repeat,
+                prefix=prefix,
+                silent=silent,
+                level=level,
+            )
+
+        try:
+            with wandb_term_module._dynamic_text_lock, wandb_term_module._l_above_dynamic_text():
+                if not repeat:
+                    printed_messages = wandb_term_module._printed_messages
+                    if string in printed_messages:
+                        return
+                    if len(printed_messages) < 1000:
+                        printed_messages.add(string)
+
+                message = _build_wandb_rich_text(string, prefix=prefix)
+                active_console = getattr(
+                    wandb_term_module, "_lora_finetune_rich_console", target_console
+                )
+                active_console.print(message, end="\n" if newline else "")
+        except Exception:
+            return original_log(
+                string,
+                newline=newline,
+                repeat=repeat,
+                prefix=prefix,
+                silent=silent,
+                level=level,
+            )
+
+    setattr(wandb_term_module, "_log", _rich_wandb_log)
+    setattr(wandb_term_module, "_lora_finetune_rich_log_installed", True)
+    return True
+
+
 def _format_log_record_message(record: logging.LogRecord) -> str:
     try:
         return record.getMessage()
@@ -300,6 +381,7 @@ def suppress_warnings() -> None:
         ],
         handler,
     )
+    _install_wandb_rich_terminal_logging(console)
 
     # Also handle Python warnings module
     def _rich_showwarning(message, category, filename, lineno, file=None, line=None):

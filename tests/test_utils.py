@@ -1,8 +1,9 @@
 """Tests for utility functions."""
 
+import contextlib
 import logging
 import random
-import warnings
+import threading
 
 import numpy as np
 import pytest
@@ -10,6 +11,7 @@ import torch
 
 from lora_finetune.utils import (
     RichWarningHandler,
+    _install_wandb_rich_terminal_logging,
     _normalize_warning_message,
     capture_stdout,
     check_bitsandbytes_available,
@@ -435,6 +437,93 @@ class TestRichWarningHandlerBuffering:
         handler.emit(self._make_record("immediate"))
 
         assert len(cap.messages) == 1
+
+
+class TestWandbRichTerminalLogging:
+    def _make_term_module(self):
+        class FakeTermModule:
+            def __init__(self):
+                self._dynamic_text_lock = threading.Lock()
+                self._printed_messages = set()
+                self._silent = False
+                self.fallback_calls = []
+
+            @contextlib.contextmanager
+            def _l_above_dynamic_text(self):
+                yield
+
+        module = FakeTermModule()
+
+        def original_log(
+            string="", newline=True, repeat=True, prefix=True, silent=False, level=logging.INFO
+        ):
+            module.fallback_calls.append(
+                {
+                    "string": string,
+                    "newline": newline,
+                    "repeat": repeat,
+                    "prefix": prefix,
+                    "silent": silent,
+                    "level": level,
+                }
+            )
+
+        module._log = original_log
+        return module
+
+    def _make_console(self):
+        class CaptureConsole:
+            def __init__(self):
+                self.messages = []
+
+            def print(self, message, end="\n"):
+                self.messages.append((message, end))
+
+        return CaptureConsole()
+
+    def test_install_wandb_rich_terminal_logging_renders_wandb_prefix(self):
+        term_module = self._make_term_module()
+        capture_console = self._make_console()
+
+        installed = _install_wandb_rich_terminal_logging(capture_console, term_module)
+        term_module._log("hello world")
+
+        assert installed is True
+        assert len(capture_console.messages) == 1
+        message, end = capture_console.messages[0]
+        assert message.plain == "wandb: hello world"
+        assert end == "\n"
+        assert any(span.style == "bold blue" for span in message.spans)
+
+    def test_install_wandb_rich_terminal_logging_deduplicates_repeat_false(self):
+        term_module = self._make_term_module()
+        capture_console = self._make_console()
+
+        _install_wandb_rich_terminal_logging(capture_console, term_module)
+        term_module._log("same line", repeat=False)
+        term_module._log("same line", repeat=False)
+
+        assert len(capture_console.messages) == 1
+
+    def test_install_wandb_rich_terminal_logging_uses_original_log_in_silent_mode(self):
+        term_module = self._make_term_module()
+        term_module._silent = True
+        capture_console = self._make_console()
+
+        _install_wandb_rich_terminal_logging(capture_console, term_module)
+        term_module._log("silent line", level=logging.WARNING)
+
+        assert len(capture_console.messages) == 0
+        assert term_module.fallback_calls == [
+            {
+                "string": "silent line",
+                "newline": True,
+                "repeat": True,
+                "prefix": True,
+                "silent": False,
+                "level": logging.WARNING,
+            }
+        ]
 
 
 class TestNewWarningRules:
