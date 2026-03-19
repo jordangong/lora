@@ -10,6 +10,8 @@ from lora_finetune.cli import (
     _apply_args_to_config,
     _get_base_type,
     _is_list_or_str_union,
+    _merge_hpo_param_overrides,
+    _parse_hpo_param_override,
     build_config,
     parse_args,
 )
@@ -66,6 +68,31 @@ class TestGetBaseType:
         assert _get_base_type(str) is str
         assert _get_base_type(int) is int
         assert _get_base_type(float) is float
+
+
+class TestHPOParamOverrides:
+    def test_parse_hpo_param_override_accepts_yaml_mapping(self):
+        name, spec = _parse_hpo_param_override("learning_rate={values: [1.0e-5, 2.0e-5]}")
+
+        assert name == "learning_rate"
+        assert spec == {"values": [1e-5, 2e-5]}
+
+    def test_parse_hpo_param_override_rejects_non_mapping(self):
+        import pytest
+
+        with pytest.raises(argparse.ArgumentTypeError, match="expected a YAML/JSON mapping"):
+            _parse_hpo_param_override("learning_rate=[1e-5, 2e-5]")
+
+    def test_merge_hpo_param_overrides_updates_existing_parameter(self):
+        merged = _merge_hpo_param_overrides(
+            {"learning_rate": {"values": [1e-5]}, "warmup_ratio": {"min": 0.0, "max": 0.1}},
+            [("learning_rate", {"values": [2e-5, 3e-5]})],
+        )
+
+        assert merged == {
+            "learning_rate": {"values": [2e-5, 3e-5]},
+            "warmup_ratio": {"min": 0.0, "max": 0.1},
+        }
 
 
 class TestAddDataclassArgs:
@@ -149,6 +176,7 @@ class TestAddDataclassArgs:
     def test_add_hpo_prefixed_args(self):
         parser = argparse.ArgumentParser()
         _add_dataclass_args(parser, HPOConfig, prefix="hpo_")
+        parser.add_argument("--hpo_param", action="append", type=_parse_hpo_param_override)
 
         args = parser.parse_args(
             [
@@ -159,6 +187,8 @@ class TestAddDataclassArgs:
                 "eval_accuracy",
                 "--hpo_direction",
                 "maximize",
+                "--hpo_param",
+                "learning_rate={values: [1.0e-5, 2.0e-5]}",
             ]
         )
 
@@ -166,6 +196,7 @@ class TestAddDataclassArgs:
         assert args.hpo_n_trials == 7
         assert args.hpo_metric_name == "eval_accuracy"
         assert args.hpo_direction == "maximize"
+        assert args.hpo_param == [("learning_rate", {"values": [1e-5, 2e-5]})]
 
     def test_boolean_args(self):
         """Test boolean arguments with --flag and --no_flag."""
@@ -469,6 +500,7 @@ class TestBuildConfig:
             hpo_n_trials=9,
             hpo_metric_name="eval_accuracy",
             hpo_direction="maximize",
+            hpo_param=[("learning_rate", {"values": [1e-5, 2e-5]})],
         )
         args.__dict__.update(
             {f"lora_{k}": None for k in vars(LoraConfig()).keys() if not k.startswith("_")}
@@ -524,6 +556,103 @@ class TestBuildConfig:
         assert config.hpo.n_trials == 9
         assert config.hpo.metric_name == "eval_accuracy"
         assert config.hpo.direction == "maximize"
+        assert config.hpo.parameters == {"learning_rate": {"values": [1e-5, 2e-5]}}
+
+    def test_build_config_hpo_param_overrides_yaml_parameters(self):
+        yaml_content = {
+            "hpo": {
+                "enabled": True,
+                "parameters": {
+                    "learning_rate": {"values": [1e-5]},
+                    "warmup_ratio": {"min": 0.0, "max": 0.1},
+                },
+            }
+        }
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            yaml.dump(yaml_content, f)
+            temp_path = f.name
+
+        try:
+            args = argparse.Namespace(
+                config=temp_path,
+                hpo_param=[("learning_rate", {"values": [2e-5, 3e-5]})],
+            )
+            args.__dict__.update(
+                {f"lora_{k}": None for k in vars(LoraConfig()).keys() if not k.startswith("_")}
+            )
+            args.__dict__.update(
+                {f"no_lora_{k}": None for k in vars(LoraConfig()).keys() if not k.startswith("_")}
+            )
+            args.__dict__.update(
+                {k: None for k in vars(ModelConfig()).keys() if not k.startswith("_")}
+            )
+            args.__dict__.update(
+                {f"no_{k}": None for k in vars(ModelConfig()).keys() if not k.startswith("_")}
+            )
+            args.__dict__.update(
+                {k: None for k in vars(DataConfig()).keys() if not k.startswith("_")}
+            )
+            args.__dict__.update(
+                {f"no_{k}": None for k in vars(DataConfig()).keys() if not k.startswith("_")}
+            )
+            args.__dict__.update(
+                {k: None for k in vars(TrainingConfig()).keys() if not k.startswith("_")}
+            )
+            args.__dict__.update(
+                {f"no_{k}": None for k in vars(TrainingConfig()).keys() if not k.startswith("_")}
+            )
+            args.__dict__.update(
+                {f"dpo_{k}": None for k in vars(DPOConfig()).keys() if not k.startswith("_")}
+            )
+            args.__dict__.update(
+                {f"grpo_{k}": None for k in vars(GRPOConfig()).keys() if not k.startswith("_")}
+            )
+            args.__dict__.update(
+                {f"hpo_{k}": None for k in vars(HPOConfig()).keys() if not k.startswith("_")}
+            )
+            args.__dict__.update(
+                {f"no_hpo_{k}": None for k in vars(HPOConfig()).keys() if not k.startswith("_")}
+            )
+            args.__dict__.update(
+                {
+                    f"aug_{k}": None
+                    for k in vars(AugmentationConfig()).keys()
+                    if not k.startswith("_")
+                }
+            )
+            args.__dict__.update(
+                {
+                    f"no_aug_{k}": None
+                    for k in vars(AugmentationConfig()).keys()
+                    if not k.startswith("_")
+                }
+            )
+            args.__dict__.update(
+                {
+                    f"bench_{k}": None
+                    for k in vars(Config().benchmark_eval).keys()
+                    if not k.startswith("_")
+                }
+            )
+            args.__dict__.update(
+                {
+                    f"no_bench_{k}": None
+                    for k in vars(Config().benchmark_eval).keys()
+                    if not k.startswith("_")
+                }
+            )
+
+            config = build_config(args)
+
+            assert config.hpo.parameters == {
+                "learning_rate": {"values": [2e-5, 3e-5]},
+                "warmup_ratio": {"min": 0.0, "max": 0.1},
+            }
+        finally:
+            import os
+
+            os.unlink(temp_path)
 
     def test_build_config_from_yaml(self):
         """Test building config from YAML file."""

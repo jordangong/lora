@@ -1,8 +1,11 @@
 """Command-line interface and argument parsing for LoRA finetuning."""
 
 import argparse
+import copy
 import dataclasses
-from typing import Any, Dict, List, Optional, Type, Union, get_args, get_origin
+from typing import Any, Dict, List, Optional, Tuple, Type, Union, get_args, get_origin
+
+import yaml
 
 from .config import (
     AugmentationConfig,
@@ -40,6 +43,48 @@ def _get_base_type(type_hint: Type) -> Type:
         if non_none_args:
             return non_none_args[0]
     return type_hint
+
+
+def _parse_hpo_param_override(value: str) -> Tuple[str, Dict[str, Any]]:
+    name, separator, raw_spec = value.partition("=")
+    name = name.strip()
+    raw_spec = raw_spec.strip()
+
+    if not separator or not name or not raw_spec:
+        raise argparse.ArgumentTypeError(
+            "--hpo_param must be provided as NAME=SPEC, where SPEC is a YAML/JSON mapping"
+        )
+
+    try:
+        spec = yaml.safe_load(raw_spec)
+    except yaml.YAMLError as exc:
+        raise argparse.ArgumentTypeError(f"Invalid --hpo_param spec for '{name}': {exc}") from exc
+
+    if not isinstance(spec, dict):
+        raise argparse.ArgumentTypeError(
+            f"Invalid --hpo_param spec for '{name}': expected a YAML/JSON mapping"
+        )
+
+    return name, spec
+
+
+def _merge_hpo_param_overrides(
+    existing_parameters: Optional[Dict[str, Dict[str, Any]]],
+    overrides: Optional[List[Union[str, Tuple[str, Dict[str, Any]]]]],
+) -> Optional[Dict[str, Dict[str, Any]]]:
+    if not overrides:
+        return existing_parameters
+
+    merged_parameters = (
+        copy.deepcopy(existing_parameters) if existing_parameters is not None else {}
+    )
+    for override in overrides:
+        if isinstance(override, str):
+            parameter_name, spec = _parse_hpo_param_override(override)
+        else:
+            parameter_name, spec = override
+        merged_parameters[parameter_name] = spec
+    return merged_parameters
 
 
 def _add_dataclass_args(
@@ -192,6 +237,14 @@ def parse_args() -> argparse.Namespace:
 
     # HPO config with "hpo_" prefix
     _add_dataclass_args(parser, HPOConfig, prefix="hpo_")
+    parser.add_argument(
+        "--hpo_param",
+        action="append",
+        type=_parse_hpo_param_override,
+        default=None,
+        metavar="NAME=SPEC",
+        help="Repeatable HPO parameter override, e.g. --hpo_param learning_rate='{values: [1.0e-5, 2.0e-5]}'",
+    )
 
     # Benchmark evaluation config with "bench_" prefix
     _add_dataclass_args(parser, BenchmarkEvalConfig, prefix="bench_")
@@ -255,6 +308,10 @@ def build_config(args: argparse.Namespace) -> Config:
     _apply_args_to_config(config.dpo, args_dict, prefix="dpo_")
     _apply_args_to_config(config.grpo, args_dict, prefix="grpo_")
     _apply_args_to_config(config.hpo, args_dict, prefix="hpo_")
+    config.hpo.parameters = _merge_hpo_param_overrides(
+        config.hpo.parameters,
+        args_dict.get("hpo_param"),
+    )
     _apply_args_to_config(config.benchmark_eval, args_dict, prefix="bench_")
 
     return config

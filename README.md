@@ -500,6 +500,15 @@ uv run lora-train \
   --hpo_direction maximize
 ```
 
+Sweep parameter specs can also be overridden with repeatable `--hpo_param NAME=SPEC` flags, where `SPEC` is a YAML/JSON mapping:
+
+```bash
+uv run lora-train \
+  --config configs/llama3_lora_hpo.yaml \
+  --hpo_param "learning_rate={values: [1.0e-5, 2.0e-5, 3.0e-5]}" \
+  --hpo_param "warmup_ratio={distribution: uniform, min: 0.0, max: 0.1}"
+```
+
 Notes:
 
 - **W&B project resolution**
