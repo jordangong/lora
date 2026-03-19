@@ -1,29 +1,31 @@
 """Main training script for LoRA finetuning."""
 
-import copy
-import gc
 import logging
-import os
+import sys
 from typing import Any
 
-import torch
-from rich.panel import Panel
-from rich.status import Status
-from rich.table import Table
-
+from . import train_modes as imported_train_modes
+from . import train_runtime as imported_train_runtime
+from . import train_support as imported_train_support
 from .cli import build_config, parse_args
 from .config import BenchmarkEvalConfig, Config
 from .utils import (
     console,
     get_method_display_name,
     get_warning_handler,
-    print_model_size,
     set_seed,
     setup_logging,
     suppress_warnings,
 )
+from .utils import (
+    print_model_size as imported_print_model_size,
+)
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_LORA_TARGET_MODULES = ["q_proj", "v_proj", "k_proj", "o_proj"]
+
+print_model_size = imported_print_model_size
 
 hf_set_seed = None
 get_text_collator = None
@@ -57,739 +59,106 @@ apply_hpo_parameters_to_config_sections = None
 
 
 def _ensure_runtime_imports():
-    global hf_set_seed
-    global get_text_collator, get_text_classification_collator
-    global load_text_dataset, prepare_grpo_dataset_for_trl, prepare_preference_dataset_for_trl
-    global prepare_text_dataset_for_trl
-    global preprocess_text_dataset, preprocess_text_classification_dataset
-    global requires_trl_native_dataset
-    global get_vision_collator, load_vision_dataset, preprocess_vision_dataset
-    global LightEvalCallback, run_lighteval
-    global get_peft_model_with_lora, load_model_and_tokenizer
-    global get_llm_target_modules, get_text_target_modules
-    global get_num_labels_from_dataset, get_id2label, get_label2id, get_vision_target_modules
-    global compute_metrics_for_classification, compute_metrics_for_lm
-    global create_trainer, prepare_model_for_training
-    global run_hyperparameter_search
-    global apply_hpo_parameters_to_config_sections
-
-    if hf_set_seed is None:
-        from transformers import set_seed as imported_hf_set_seed
-
-        hf_set_seed = imported_hf_set_seed
-
-    if any(
-        value is None
-        for value in (
-            get_text_collator,
-            get_text_classification_collator,
-            load_text_dataset,
-            prepare_grpo_dataset_for_trl,
-            prepare_preference_dataset_for_trl,
-            prepare_text_dataset_for_trl,
-            preprocess_text_dataset,
-            preprocess_text_classification_dataset,
-            requires_trl_native_dataset,
-        )
-    ):
-        from .data.text_data import (
-            get_text_classification_collator as imported_get_text_classification_collator,
-        )
-        from .data.text_data import (
-            get_text_collator as imported_get_text_collator,
-        )
-        from .data.text_data import (
-            load_text_dataset as imported_load_text_dataset,
-        )
-        from .data.text_data import (
-            prepare_grpo_dataset_for_trl as imported_prepare_grpo_dataset_for_trl,
-        )
-        from .data.text_data import (
-            prepare_preference_dataset_for_trl as imported_prepare_preference_dataset_for_trl,
-        )
-        from .data.text_data import (
-            prepare_text_dataset_for_trl as imported_prepare_text_dataset_for_trl,
-        )
-        from .data.text_data import (
-            preprocess_text_classification_dataset as imported_preprocess_text_classification_dataset,
-        )
-        from .data.text_data import (
-            preprocess_text_dataset as imported_preprocess_text_dataset,
-        )
-        from .data.text_data import (
-            requires_trl_native_dataset as imported_requires_trl_native_dataset,
-        )
-
-        if get_text_collator is None:
-            get_text_collator = imported_get_text_collator
-        if get_text_classification_collator is None:
-            get_text_classification_collator = imported_get_text_classification_collator
-        if load_text_dataset is None:
-            load_text_dataset = imported_load_text_dataset
-        if prepare_grpo_dataset_for_trl is None:
-            prepare_grpo_dataset_for_trl = imported_prepare_grpo_dataset_for_trl
-        if prepare_preference_dataset_for_trl is None:
-            prepare_preference_dataset_for_trl = imported_prepare_preference_dataset_for_trl
-        if prepare_text_dataset_for_trl is None:
-            prepare_text_dataset_for_trl = imported_prepare_text_dataset_for_trl
-        if preprocess_text_dataset is None:
-            preprocess_text_dataset = imported_preprocess_text_dataset
-        if preprocess_text_classification_dataset is None:
-            preprocess_text_classification_dataset = imported_preprocess_text_classification_dataset
-        if requires_trl_native_dataset is None:
-            requires_trl_native_dataset = imported_requires_trl_native_dataset
-
-    if any(
-        value is None
-        for value in (get_vision_collator, load_vision_dataset, preprocess_vision_dataset)
-    ):
-        from .data.vision_data import (
-            get_vision_collator as imported_get_vision_collator,
-        )
-        from .data.vision_data import (
-            load_vision_dataset as imported_load_vision_dataset,
-        )
-        from .data.vision_data import (
-            preprocess_vision_dataset as imported_preprocess_vision_dataset,
-        )
-
-        if get_vision_collator is None:
-            get_vision_collator = imported_get_vision_collator
-        if load_vision_dataset is None:
-            load_vision_dataset = imported_load_vision_dataset
-        if preprocess_vision_dataset is None:
-            preprocess_vision_dataset = imported_preprocess_vision_dataset
-
-    if LightEvalCallback is None or run_lighteval is None:
-        from .evaluators import (
-            LightEvalCallback as imported_LightEvalCallback,
-        )
-        from .evaluators import (
-            run_lighteval as imported_run_lighteval,
-        )
-
-        if LightEvalCallback is None:
-            LightEvalCallback = imported_LightEvalCallback
-        if run_lighteval is None:
-            run_lighteval = imported_run_lighteval
-
-    if get_peft_model_with_lora is None or load_model_and_tokenizer is None:
-        from .models.base import (
-            get_peft_model_with_lora as imported_get_peft_model_with_lora,
-        )
-        from .models.base import (
-            load_model_and_tokenizer as imported_load_model_and_tokenizer,
-        )
-
-        if get_peft_model_with_lora is None:
-            get_peft_model_with_lora = imported_get_peft_model_with_lora
-        if load_model_and_tokenizer is None:
-            load_model_and_tokenizer = imported_load_model_and_tokenizer
-
-    if get_llm_target_modules is None:
-        from .models.llm import get_llm_target_modules as imported_get_llm_target_modules
-
-        get_llm_target_modules = imported_get_llm_target_modules
-
-    if get_text_target_modules is None:
-        from .models.text import get_text_target_modules as imported_get_text_target_modules
-
-        get_text_target_modules = imported_get_text_target_modules
-
-    if any(
-        value is None
-        for value in (
-            get_num_labels_from_dataset,
-            get_id2label,
-            get_label2id,
-            get_vision_target_modules,
-        )
-    ):
-        from .models.vision import (
-            get_id2label as imported_get_id2label,
-        )
-        from .models.vision import (
-            get_label2id as imported_get_label2id,
-        )
-        from .models.vision import (
-            get_num_labels_from_dataset as imported_get_num_labels_from_dataset,
-        )
-        from .models.vision import (
-            get_vision_target_modules as imported_get_vision_target_modules,
-        )
-
-        if get_num_labels_from_dataset is None:
-            get_num_labels_from_dataset = imported_get_num_labels_from_dataset
-        if get_id2label is None:
-            get_id2label = imported_get_id2label
-        if get_label2id is None:
-            get_label2id = imported_get_label2id
-        if get_vision_target_modules is None:
-            get_vision_target_modules = imported_get_vision_target_modules
-
-    if any(
-        value is None
-        for value in (
-            compute_metrics_for_classification,
-            compute_metrics_for_lm,
-            create_trainer,
-            prepare_model_for_training,
-            run_hyperparameter_search,
-            apply_hpo_parameters_to_config_sections,
-        )
-    ):
-        from .trainer import (
-            apply_hpo_parameters_to_config_sections as imported_apply_hpo_parameters_to_config_sections,
-        )
-        from .trainer import (
-            compute_metrics_for_classification as imported_compute_metrics_for_classification,
-        )
-        from .trainer import (
-            compute_metrics_for_lm as imported_compute_metrics_for_lm,
-        )
-        from .trainer import (
-            create_trainer as imported_create_trainer,
-        )
-        from .trainer import (
-            prepare_model_for_training as imported_prepare_model_for_training,
-        )
-        from .trainer import (
-            run_hyperparameter_search as imported_run_hyperparameter_search,
-        )
-
-        if compute_metrics_for_classification is None:
-            compute_metrics_for_classification = imported_compute_metrics_for_classification
-        if compute_metrics_for_lm is None:
-            compute_metrics_for_lm = imported_compute_metrics_for_lm
-        if create_trainer is None:
-            create_trainer = imported_create_trainer
-        if prepare_model_for_training is None:
-            prepare_model_for_training = imported_prepare_model_for_training
-        if run_hyperparameter_search is None:
-            run_hyperparameter_search = imported_run_hyperparameter_search
-        if apply_hpo_parameters_to_config_sections is None:
-            apply_hpo_parameters_to_config_sections = (
-                imported_apply_hpo_parameters_to_config_sections
-            )
+    imported_train_runtime.ensure_runtime_imports(sys.modules[__name__])
 
 
 def run_benchmark_eval(model, model_name: str, eval_config: BenchmarkEvalConfig) -> None:
     """Run benchmark evaluation after training using lighteval."""
-    _ensure_runtime_imports()
-    console.print(Panel("[bold blue]Running Benchmark Evaluation[/bold blue]"))
-
-    metrics = run_lighteval(
-        model=model,
-        model_name=model_name,
-        tasks=eval_config.tasks,
-        max_samples=eval_config.num_samples,
-        batch_size=eval_config.batch_size,
-        max_new_tokens=eval_config.max_new_tokens,
+    imported_train_support.run_benchmark_eval(
+        sys.modules[__name__],
+        model,
+        model_name,
+        eval_config,
     )
-
-    # Display results
-    table = Table(title="Benchmark Evaluation Results")
-    table.add_column("Metric", style="cyan")
-    table.add_column("Value", style="green")
-    for metric_name, value in metrics.items():
-        table.add_row(metric_name, f"{value:.4f}")
-    console.print(table)
 
 
 def _cleanup_trainer_callbacks(trainer) -> None:
-    callback_handler = getattr(trainer, "callback_handler", None)
-    if callback_handler is None:
-        return
-
-    for callback in getattr(callback_handler, "callbacks", []):
-        cleanup = getattr(callback, "cleanup", None)
-        if callable(cleanup):
-            cleanup()
+    imported_train_support.cleanup_trainer_callbacks(trainer)
 
 
 def _run_trainer_training(trainer, resume_from_checkpoint=None) -> None:
-    try:
-        trainer.train(resume_from_checkpoint=resume_from_checkpoint)
-    finally:
-        _cleanup_trainer_callbacks(trainer)
+    imported_train_support.run_trainer_training(
+        trainer,
+        cleanup_trainer_callbacks_fn=_cleanup_trainer_callbacks,
+        resume_from_checkpoint=resume_from_checkpoint,
+    )
 
 
 def _run_trainer_hpo(trainer, config: Config):
-    try:
-        if getattr(trainer, "model_init", None) is not None:
-            try:
-                from accelerate.utils.memory import release_memory
-
-                trainer.model_wrapped, trainer.model = release_memory(
-                    getattr(trainer, "model_wrapped", None),
-                    getattr(trainer, "model", None),
-                )
-            except ImportError:
-                trainer.model_wrapped = None
-                trainer.model = None
-                gc.collect()
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-            if hasattr(trainer, "optimizer"):
-                trainer.optimizer = None
-            if hasattr(trainer, "lr_scheduler"):
-                trainer.lr_scheduler = None
-            if hasattr(trainer, "accelerator") and trainer.accelerator is not None:
-                trainer.accelerator.free_memory()
-        return run_hyperparameter_search(trainer, config.training, config.hpo)
-    finally:
-        _cleanup_trainer_callbacks(trainer)
+    return imported_train_support.run_trainer_hpo(
+        trainer,
+        config,
+        run_hyperparameter_search_fn=run_hyperparameter_search,
+        cleanup_trainer_callbacks_fn=_cleanup_trainer_callbacks,
+    )
 
 
 def _display_hpo_best_run(best_run: Any) -> None:
-    console.print(Panel("[bold blue]Hyperparameter Search Complete[/bold blue]"))
-    table = Table(title="Best Hyperparameter Run")
-    table.add_column("Field", style="cyan")
-    table.add_column("Value", style="green")
-    table.add_row("Run ID", str(getattr(best_run, "run_id", "N/A")))
-    table.add_row("Objective", str(getattr(best_run, "objective", "N/A")))
-    hyperparameters = getattr(best_run, "hyperparameters", {}) or {}
-    for key, value in sorted(hyperparameters.items()):
-        if key in {"assignments", "metric"}:
-            continue
-        table.add_row(key, str(value))
-    sweep_id = getattr(best_run, "run_summary", None)
-    if sweep_id is not None:
-        table.add_row("Sweep ID", str(sweep_id))
-    console.print(table)
+    imported_train_support.display_hpo_best_run(console, best_run)
 
 
 def _save_hpo_best_config(config: Config, best_run: Any) -> None:
-    _ensure_runtime_imports()
-    hyperparameters = getattr(best_run, "hyperparameters", {}) or {}
-    if not hyperparameters:
-        return
+    imported_train_support.save_hpo_best_config(sys.modules[__name__], config, best_run)
 
-    best_config = copy.deepcopy(config)
-    apply_hpo_parameters_to_config_sections(
-        {
-            "training": best_config.training,
-            "lora": best_config.lora,
-            "dpo": best_config.dpo,
-            "grpo": best_config.grpo,
-        },
-        hyperparameters,
+
+def _run_with_status(status_message: str, fn):
+    return imported_train_support.run_with_status(
+        get_warning_handler,
+        console,
+        status_message,
+        fn,
     )
-    os.makedirs(best_config.training.output_dir, exist_ok=True)
-    best_config_path = os.path.join(best_config.training.output_dir, "best_hpo_config.yaml")
-    best_config.to_yaml(best_config_path)
-    console.print(Panel(f"[bold blue]Saved best HPO config:[/bold blue] {best_config_path}"))
+
+
+def _resolve_default_target_modules(config: Config, resolver) -> None:
+    imported_train_support.resolve_default_target_modules(config, resolver)
+
+
+def _get_train_and_eval_datasets(dataset, data_config):
+    return imported_train_support.get_train_and_eval_datasets(dataset, data_config)
+
+
+def _get_hpo_config_sections(config: Config) -> dict[str, Any]:
+    return imported_train_support.get_hpo_config_sections(config)
+
+
+def _get_hpo_setup(config: Config, build_model):
+    return imported_train_support.get_hpo_setup(
+        config,
+        build_model,
+        _get_hpo_config_sections,
+    )
+
+
+def _run_hpo_if_enabled(trainer, config: Config) -> bool:
+    return imported_train_support.run_hpo_if_enabled(
+        trainer,
+        config,
+        _run_trainer_hpo,
+        _display_hpo_best_run,
+        _save_hpo_best_config,
+    )
+
+
+def _save_and_maybe_push_model(trainer, config: Config) -> None:
+    imported_train_support.save_and_maybe_push_model(console, trainer, config)
 
 
 def train_llm(config: Config) -> None:
     """Train a language model with LoRA."""
     _ensure_runtime_imports()
-    trainer_type = config.training.trainer_type
-    if config.model.use_unsloth and trainer_type != "sft":
-        raise ValueError("Unsloth is currently only supported with training.trainer_type='sft'")
-    if config.benchmark_eval.enabled and trainer_type != "sft":
-        raise ValueError(
-            "benchmark_eval is currently only supported with training.trainer_type='sft'"
-        )
-
-    def _build_llm_model_and_tokenizer():
-        model, tokenizer = load_model_and_tokenizer(
-            config.model,
-            max_seq_length=config.data.max_seq_length,
-        )
-
-        if config.lora.target_modules is None or config.lora.target_modules == [
-            "q_proj",
-            "v_proj",
-            "k_proj",
-            "o_proj",
-        ]:
-            config.lora.target_modules = get_llm_target_modules(config.model.model_name_or_path)
-
-        is_quantized = config.model.load_in_4bit or config.model.load_in_8bit
-        model = get_peft_model_with_lora(
-            model,
-            config.lora,
-            model_type=config.model.model_type,
-            is_quantized=is_quantized,
-            use_unsloth=config.model.use_unsloth,
-            use_gradient_checkpointing=config.training.gradient_checkpointing,
-            random_state=config.training.seed,
-            max_seq_length=config.data.max_seq_length,
-        )
-
-        model = prepare_model_for_training(model, config.training, tokenizer)
-        return model, tokenizer
-
-    wh = get_warning_handler()
-    if wh is not None:
-        wh.start_buffering()
-    with Status("[bold blue]Loading model...", console=console):
-        model, tokenizer = _build_llm_model_and_tokenizer()
-    if wh is not None:
-        wh.flush_buffered()
-
-    print_model_size(model)
-
-    if wh is not None:
-        wh.start_buffering()
-    with Status("[bold blue]Loading dataset...", console=console):
-        dataset = load_text_dataset(config.data)
-        use_trl_native_dataset = (
-            trainer_type == "sft"
-            and config.training.llm_trainer == "trl"
-            and (config.data.append_eos_token or requires_trl_native_dataset(dataset))
-        )
-        if trainer_type == "dpo":
-            prepared_dataset = prepare_preference_dataset_for_trl(
-                dataset,
-                config.data,
-                shuffle_seed=config.training.data_seed,
-            )
-        elif trainer_type == "grpo":
-            prepared_dataset = prepare_grpo_dataset_for_trl(
-                dataset,
-                config.data,
-                shuffle_seed=config.training.data_seed,
-            )
-        elif use_trl_native_dataset:
-            prepared_dataset = prepare_text_dataset_for_trl(
-                dataset,
-                config.data,
-                shuffle_seed=config.training.data_seed,
-            )
-        else:
-            prepared_dataset = preprocess_text_dataset(
-                dataset,
-                tokenizer,
-                config.data,
-                shuffle_seed=config.training.data_seed,
-            )
-
-    if wh is not None:
-        wh.flush_buffered()
-
-    train_dataset = prepared_dataset[config.data.train_split]
-    eval_dataset = None
-    if config.data.validation_split in prepared_dataset:
-        eval_dataset = prepared_dataset[config.data.validation_split]
-
-    if trainer_type == "sft":
-        data_collator = None if use_trl_native_dataset else get_text_collator(tokenizer)
-    else:
-        data_collator = None
-
-    if trainer_type == "sft":
-        compute_metrics = compute_metrics_for_lm if eval_dataset is not None else None
-    else:
-        compute_metrics = None
-
-    # Create benchmark evaluation callback if enabled
-    callbacks = []
-    if config.benchmark_eval.enabled and trainer_type == "sft":
-        eval_callback = LightEvalCallback(
-            model_name=config.model.model_name_or_path,
-            tasks=config.benchmark_eval.tasks,
-            eval_steps=config.benchmark_eval.eval_steps,
-            max_samples=config.benchmark_eval.num_samples,
-            max_new_tokens=config.benchmark_eval.max_new_tokens,
-            batch_size=config.benchmark_eval.batch_size,
-        )
-        callbacks.append(eval_callback)
-        logger.info(
-            f"Benchmark eval ({config.benchmark_eval.tasks}) enabled every {config.benchmark_eval.eval_steps} steps"
-        )
-
-    hpo_config_sections = None
-    model_init = None
-    if config.hpo.enabled:
-        hpo_config_sections = {
-            "training": config.training,
-            "lora": config.lora,
-            "dpo": config.dpo,
-            "grpo": config.grpo,
-        }
-
-        def model_init(_trial=None):
-            rebuilt_model, _ = _build_llm_model_and_tokenizer()
-            return rebuilt_model
-
-    trainer = create_trainer(
-        model=model,
-        training_config=config.training,
-        model_config=config.model,
-        train_dataset=train_dataset,
-        data_config=config.data,
-        dpo_config=config.dpo,
-        grpo_config=config.grpo,
-        benchmark_eval_config=config.benchmark_eval,
-        eval_dataset=eval_dataset,
-        processing_class=tokenizer,
-        data_collator=data_collator,
-        compute_metrics=compute_metrics,
-        lora_config=config.lora,
-        callbacks=callbacks if callbacks else None,
-        hpo_config=config.hpo,
-        model_init=model_init,
-        hpo_config_sections=hpo_config_sections,
-    )
-
-    if config.hpo.enabled:
-        model = None
-        best_run = _run_trainer_hpo(trainer, config)
-        _display_hpo_best_run(best_run)
-        _save_hpo_best_config(config, best_run)
-        return
-
-    _run_trainer_training(trainer, resume_from_checkpoint=config.training.resume_from_checkpoint)
-
-    with Status("[bold blue]Saving model...", console=console):
-        trainer.save_model()
-
-    if config.training.push_to_hub:
-        with Status("[bold blue]Pushing to Hub...", console=console):
-            trainer.push_to_hub()
-
-    # Run benchmark evaluation if enabled
-    if config.benchmark_eval.enabled and trainer_type == "sft":
-        run_benchmark_eval(model, config.model.model_name_or_path, config.benchmark_eval)
+    imported_train_modes.train_llm(config, deps=sys.modules[__name__], logger=logger)
 
 
 def train_vision(config: Config) -> None:
     """Train a vision model with LoRA."""
     _ensure_runtime_imports()
-    # Vision training uses set_transform which needs the original image column
-    if config.training.remove_unused_columns:
-        config.training.remove_unused_columns = False
-
-    num_labels = None
-
-    def _build_vision_model():
-        model, image_processor = load_model_and_tokenizer(config.model, num_labels=num_labels)
-
-        if config.lora.target_modules is None or config.lora.target_modules == [
-            "q_proj",
-            "v_proj",
-            "k_proj",
-            "o_proj",
-        ]:
-            config.lora.target_modules = get_vision_target_modules(config.model.model_name_or_path)
-
-        is_quantized = config.model.load_in_4bit or config.model.load_in_8bit
-        model = get_peft_model_with_lora(
-            model,
-            config.lora,
-            model_type="vision",
-            is_quantized=is_quantized,
-        )
-
-        model = prepare_model_for_training(model, config.training)
-        return model, image_processor
-
-    wh = get_warning_handler()
-    if wh is not None:
-        wh.start_buffering()
-    with Status("[bold blue]Loading dataset...", console=console):
-        dataset = load_vision_dataset(config.data)
-        num_labels = get_num_labels_from_dataset(dataset[config.data.train_split])
-    if wh is not None:
-        wh.flush_buffered()
-
-    if wh is not None:
-        wh.start_buffering()
-    with Status("[bold blue]Loading model...", console=console):
-        model, image_processor = _build_vision_model()
-    if wh is not None:
-        wh.flush_buffered()
-
-    print_model_size(model)
-
-    if wh is not None:
-        wh.start_buffering()
-    with Status("[bold blue]Preprocessing dataset...", console=console):
-        processed_dataset = preprocess_vision_dataset(dataset, image_processor, config.data)
-    if wh is not None:
-        wh.flush_buffered()
-
-    train_dataset = processed_dataset[config.data.train_split]
-    eval_dataset = None
-    if config.data.validation_split in processed_dataset:
-        eval_dataset = processed_dataset[config.data.validation_split]
-
-    data_collator = get_vision_collator()
-
-    # Use accuracy metric for vision classification
-    compute_metrics = compute_metrics_for_classification if eval_dataset is not None else None
-
-    hpo_config_sections = None
-    model_init = None
-    if config.hpo.enabled:
-        hpo_config_sections = {
-            "training": config.training,
-            "lora": config.lora,
-            "dpo": config.dpo,
-            "grpo": config.grpo,
-        }
-
-        def model_init(_trial=None):
-            rebuilt_model, _ = _build_vision_model()
-            return rebuilt_model
-
-    trainer = create_trainer(
-        model=model,
-        training_config=config.training,
-        model_config=config.model,
-        train_dataset=train_dataset,
-        benchmark_eval_config=config.benchmark_eval,
-        eval_dataset=eval_dataset,
-        processing_class=None,
-        data_collator=data_collator,
-        compute_metrics=compute_metrics,
-        lora_config=config.lora,
-        hpo_config=config.hpo,
-        model_init=model_init,
-        hpo_config_sections=hpo_config_sections,
-    )
-
-    if config.hpo.enabled:
-        model = None
-        best_run = _run_trainer_hpo(trainer, config)
-        _display_hpo_best_run(best_run)
-        _save_hpo_best_config(config, best_run)
-        return
-
-    _run_trainer_training(trainer, resume_from_checkpoint=config.training.resume_from_checkpoint)
-
-    with Status("[bold blue]Saving model...", console=console):
-        trainer.save_model()
-
-    if config.training.push_to_hub:
-        with Status("[bold blue]Pushing to Hub...", console=console):
-            trainer.push_to_hub()
+    imported_train_modes.train_vision(config, deps=sys.modules[__name__])
 
 
 def train_text_classification(config: Config) -> None:
     _ensure_runtime_imports()
-
-    num_labels = None
-    id2label = None
-    label2id = None
-
-    def _build_text_classification_model():
-        model, tokenizer = load_model_and_tokenizer(
-            config.model,
-            num_labels=num_labels,
-            max_seq_length=config.data.max_seq_length,
-            id2label=id2label or None,
-            label2id=label2id or None,
-        )
-
-        if config.lora.target_modules is None or config.lora.target_modules == [
-            "q_proj",
-            "v_proj",
-            "k_proj",
-            "o_proj",
-        ]:
-            config.lora.target_modules = get_text_target_modules(config.model.model_name_or_path)
-
-        is_quantized = config.model.load_in_4bit or config.model.load_in_8bit
-        model = get_peft_model_with_lora(
-            model,
-            config.lora,
-            model_type="text_classification",
-            is_quantized=is_quantized,
-        )
-
-        model = prepare_model_for_training(model, config.training, tokenizer)
-        return model, tokenizer
-
-    wh = get_warning_handler()
-    if wh is not None:
-        wh.start_buffering()
-    with Status("[bold blue]Loading dataset...", console=console):
-        dataset = load_text_dataset(config.data)
-        train_split = dataset[config.data.train_split]
-        num_labels = get_num_labels_from_dataset(train_split, label_column=config.data.label_column)
-        id2label = get_id2label(train_split, label_column=config.data.label_column)
-        label2id = get_label2id(train_split, label_column=config.data.label_column)
-    if wh is not None:
-        wh.flush_buffered()
-
-    if wh is not None:
-        wh.start_buffering()
-    with Status("[bold blue]Loading model...", console=console):
-        model, tokenizer = _build_text_classification_model()
-    if wh is not None:
-        wh.flush_buffered()
-
-    print_model_size(model)
-
-    if wh is not None:
-        wh.start_buffering()
-    with Status("[bold blue]Preprocessing dataset...", console=console):
-        processed_dataset = preprocess_text_classification_dataset(
-            dataset,
-            tokenizer,
-            config.data,
-            shuffle_seed=config.training.data_seed,
-        )
-    if wh is not None:
-        wh.flush_buffered()
-
-    train_dataset = processed_dataset[config.data.train_split]
-    eval_dataset = None
-    if config.data.validation_split in processed_dataset:
-        eval_dataset = processed_dataset[config.data.validation_split]
-
-    data_collator = get_text_classification_collator(tokenizer)
-    compute_metrics = compute_metrics_for_classification if eval_dataset is not None else None
-
-    hpo_config_sections = None
-    model_init = None
-    if config.hpo.enabled:
-        hpo_config_sections = {
-            "training": config.training,
-            "lora": config.lora,
-            "dpo": config.dpo,
-            "grpo": config.grpo,
-        }
-
-        def model_init(_trial=None):
-            rebuilt_model, _ = _build_text_classification_model()
-            return rebuilt_model
-
-    trainer = create_trainer(
-        model=model,
-        training_config=config.training,
-        model_config=config.model,
-        train_dataset=train_dataset,
-        data_config=config.data,
-        benchmark_eval_config=config.benchmark_eval,
-        eval_dataset=eval_dataset,
-        processing_class=tokenizer,
-        data_collator=data_collator,
-        compute_metrics=compute_metrics,
-        lora_config=config.lora,
-        hpo_config=config.hpo,
-        model_init=model_init,
-        hpo_config_sections=hpo_config_sections,
-    )
-
-    if config.hpo.enabled:
-        model = None
-        best_run = _run_trainer_hpo(trainer, config)
-        _display_hpo_best_run(best_run)
-        _save_hpo_best_config(config, best_run)
-        return
-
-    _run_trainer_training(trainer, resume_from_checkpoint=config.training.resume_from_checkpoint)
-
-    with Status("[bold blue]Saving model...", console=console):
-        trainer.save_model()
-
-    if config.training.push_to_hub:
-        with Status("[bold blue]Pushing to Hub...", console=console):
-            trainer.push_to_hub()
+    imported_train_modes.train_text_classification(config, deps=sys.modules[__name__])
 
 
 def main() -> None:
@@ -809,81 +178,12 @@ def main() -> None:
     set_seed(config.training.seed)
     hf_set_seed(config.training.seed)
 
-    # Display configuration in a nice table
-    table = Table(show_header=False, box=None, padding=(0, 2))
-    table.add_column("Setting", style="bold")
-    table.add_column("Value", style="cyan")
-
-    # Model settings
-    table.add_row("Model", config.model.model_name_or_path)
-    table.add_row("Model type", config.model.model_type)
-    if config.model.model_type == "causal_lm":
-        table.add_row("Unsloth", "✓" if config.model.use_unsloth else "✗")
-    table.add_row("Flash Attention 2", "✓" if config.model.use_flash_attention_2 else "✗")
-    if config.model.load_in_4bit or config.model.load_in_8bit:
-        table.add_row("Quantization", "4-bit" if config.model.load_in_4bit else "8-bit")
-    table.add_row("", "")  # Separator
-
-    # Data settings
-    table.add_row("Dataset", config.data.dataset_name or config.data.train_file or "N/A")
-    if config.data.dataset_config_name:
-        table.add_row("Dataset config", config.data.dataset_config_name)
-    if config.model.model_type != "vision":
-        table.add_row("Max seq length", str(config.data.max_seq_length))
-    if config.data.max_train_samples:
-        table.add_row("Max train samples", str(config.data.max_train_samples))
-    if config.data.max_eval_samples:
-        table.add_row("Max eval samples", str(config.data.max_eval_samples))
-    table.add_row("", "")  # Separator
-
-    # Finetuning method settings
-    method_display = get_method_display_name(config.lora.method)
-    table.add_row("Method", method_display)
-    if config.lora.method != "full":
-        if config.lora.method in ("lora", "dora", "adalora", "loraplus"):
-            table.add_row("Rank (r)", str(config.lora.r))
-            table.add_row("Alpha", str(config.lora.alpha))
-            table.add_row("Dropout", str(config.lora.dropout))
-        if config.lora.method == "adalora":
-            table.add_row("Target rank", str(config.lora.target_r))
-        if config.lora.method == "loraplus":
-            table.add_row("LR ratio (B/A)", str(config.lora.loraplus_lr_ratio))
-        if config.lora.method == "prefix_tuning":
-            table.add_row("Virtual tokens", str(config.lora.num_virtual_tokens))
-        if config.lora.target_modules:
-            modules = config.lora.target_modules
-            if isinstance(modules, list):
-                modules = ", ".join(modules[:4]) + ("..." if len(modules) > 4 else "")
-            table.add_row("Target modules", str(modules))
-    table.add_row("", "")  # Separator
-
-    # Training settings
-    table.add_row("Epochs", str(config.training.num_train_epochs))
-    table.add_row("Batch size", str(config.training.per_device_train_batch_size))
-    table.add_row("Learning rate", str(config.training.learning_rate))
-    table.add_row("Gradient checkpointing", "✓" if config.training.gradient_checkpointing else "✗")
-    if config.model.model_type == "causal_lm":
-        table.add_row("Trainer type", config.training.trainer_type)
-        if config.training.trainer_type == "sft":
-            table.add_row("LLM trainer", config.training.llm_trainer)
-    table.add_row("FSDP", config.training.fsdp or "disabled")
-    table.add_row("Output dir", config.training.output_dir)
-    if config.hpo.enabled:
-        table.add_row("HPO", "wandb")
-        table.add_row("HPO trials", str(config.hpo.n_trials))
-        if config.hpo.metric_name:
-            table.add_row("HPO metric", config.hpo.metric_name)
-
-    # Benchmark evaluation settings
-    if config.benchmark_eval.enabled:
-        table.add_row("", "")  # Separator
-        table.add_row("Benchmark eval", "✓")
-        table.add_row("Benchmark tasks", config.benchmark_eval.tasks)
-        table.add_row("Bench eval steps", str(config.benchmark_eval.eval_steps))
-        if config.benchmark_eval.num_samples:
-            table.add_row("Bench samples", str(config.benchmark_eval.num_samples))
-
-    console.print(Panel(table, title="[bold blue]Configuration[/bold blue]", border_style="blue"))
+    console.print(
+        imported_train_support.build_configuration_panel(
+            config,
+            get_method_display_name,
+        )
+    )
 
     if config.model.model_type == "vision":
         train_vision(config)
