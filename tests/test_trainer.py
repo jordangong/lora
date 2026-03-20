@@ -345,12 +345,16 @@ class TestPrepareModelForTraining:
         class MockConfig:
             use_cache = True
 
+        class MockGenerationConfig:
+            use_cache = True
+
         class MockModel(nn.Module):
             def __init__(self):
                 super().__init__()
                 self.linear = nn.Linear(10, 5)
                 self._gc_enabled = False
                 self.config = MockConfig()
+                self.generation_config = MockGenerationConfig()
                 self._lora_finetune_unsloth_managed_gradient_checkpointing = True
 
             def gradient_checkpointing_enable(self, gradient_checkpointing_kwargs=None):
@@ -362,7 +366,8 @@ class TestPrepareModelForTraining:
         result = prepare_model_for_training(model, config)
 
         assert result._gc_enabled is False
-        assert result.config.use_cache is True
+        assert result.config.use_cache is False
+        assert result.generation_config.use_cache is False
 
     def test_prepare_makes_params_contiguous(self):
         """Test that prepare makes parameters contiguous."""

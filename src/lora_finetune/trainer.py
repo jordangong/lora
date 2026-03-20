@@ -851,6 +851,10 @@ def prepare_model_for_training(
 
     if training_config.gradient_checkpointing and not unsloth_managed_gradient_checkpointing:
         model = enable_gradient_checkpointing(model)
+    elif training_config.gradient_checkpointing and hasattr(model, "config"):
+        model.config.use_cache = False
+        if hasattr(model, "generation_config") and model.generation_config is not None:
+            model.generation_config.use_cache = False
 
     # Sync model config with tokenizer to avoid mismatch warnings (after PEFT wrapping)
     if tokenizer is not None and tokenizer.pad_token_id is not None:
