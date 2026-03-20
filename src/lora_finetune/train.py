@@ -62,13 +62,19 @@ def _ensure_runtime_imports():
     imported_train_runtime.ensure_runtime_imports(sys.modules[__name__])
 
 
-def run_benchmark_eval(model, model_name: str, eval_config: BenchmarkEvalConfig) -> None:
+def run_benchmark_eval(
+    model,
+    model_name: str,
+    eval_config: BenchmarkEvalConfig,
+    trainer=None,
+) -> None:
     """Run benchmark evaluation after training using lighteval."""
     imported_train_support.run_benchmark_eval(
         sys.modules[__name__],
         model,
         model_name,
         eval_config,
+        trainer=trainer,
     )
 
 
@@ -76,11 +82,23 @@ def _cleanup_trainer_callbacks(trainer) -> None:
     imported_train_support.cleanup_trainer_callbacks(trainer)
 
 
-def _run_trainer_training(trainer, resume_from_checkpoint=None) -> None:
+def _run_final_trainer_evaluation(trainer):
+    return imported_train_support.run_final_trainer_evaluation(console, trainer)
+
+
+def _should_run_final_benchmark_eval(trainer, eval_config: BenchmarkEvalConfig) -> bool:
+    return imported_train_support.should_run_final_benchmark_eval(trainer, eval_config)
+
+
+def _run_trainer_training(
+    trainer, resume_from_checkpoint=None, final_evaluation_enabled=True
+) -> None:
     imported_train_support.run_trainer_training(
         trainer,
         cleanup_trainer_callbacks_fn=_cleanup_trainer_callbacks,
         resume_from_checkpoint=resume_from_checkpoint,
+        final_evaluation_fn=_run_final_trainer_evaluation,
+        final_evaluation_enabled=final_evaluation_enabled,
     )
 
 

@@ -134,13 +134,23 @@ def train_llm(config: Config, deps, logger) -> None:
     deps._run_trainer_training(
         trainer,
         resume_from_checkpoint=config.training.resume_from_checkpoint,
+        final_evaluation_enabled=str(config.training.eval_strategy).lower() != "no",
     )
 
     deps._save_and_maybe_push_model(trainer, config)
 
     # Run benchmark evaluation if enabled
-    if config.benchmark_eval.enabled and trainer_type == "sft":
-        deps.run_benchmark_eval(model, config.model.model_name_or_path, config.benchmark_eval)
+    if (
+        config.benchmark_eval.enabled
+        and trainer_type == "sft"
+        and deps._should_run_final_benchmark_eval(trainer, config.benchmark_eval)
+    ):
+        deps.run_benchmark_eval(
+            model,
+            config.model.model_name_or_path,
+            config.benchmark_eval,
+            trainer=trainer,
+        )
 
 
 def train_vision(config: Config, deps) -> None:
@@ -218,6 +228,7 @@ def train_vision(config: Config, deps) -> None:
     deps._run_trainer_training(
         trainer,
         resume_from_checkpoint=config.training.resume_from_checkpoint,
+        final_evaluation_enabled=str(config.training.eval_strategy).lower() != "no",
     )
 
     deps._save_and_maybe_push_model(trainer, config)
@@ -311,6 +322,7 @@ def train_text_classification(config: Config, deps) -> None:
     deps._run_trainer_training(
         trainer,
         resume_from_checkpoint=config.training.resume_from_checkpoint,
+        final_evaluation_enabled=str(config.training.eval_strategy).lower() != "no",
     )
 
     deps._save_and_maybe_push_model(trainer, config)

@@ -33,7 +33,32 @@ def _resolve_best_run_hpo_parameters(
     return resolved_parameters
 
 
-def run_benchmark_eval(module, model, model_name: str, eval_config: BenchmarkEvalConfig) -> None:
+def _log_benchmark_metrics_to_wandb(
+    metrics: dict[str, Any], global_step: int | None = None
+) -> None:
+    prefixed_metrics = {f"benchmark/{key}": value for key, value in metrics.items()}
+    if global_step is not None:
+        prefixed_metrics["train/global_step"] = global_step
+    try:
+        import wandb
+
+        if wandb.run is None:
+            return
+        if global_step is None:
+            wandb.log(prefixed_metrics)
+        else:
+            wandb.log(prefixed_metrics, step=global_step)
+    except ImportError:
+        pass
+
+
+def run_benchmark_eval(
+    module,
+    model,
+    model_name: str,
+    eval_config: BenchmarkEvalConfig,
+    trainer=None,
+) -> None:
     module._ensure_runtime_imports()
     module.console.print(Panel("[bold blue]Running Benchmark Evaluation[/bold blue]"))
 
@@ -45,6 +70,8 @@ def run_benchmark_eval(module, model, model_name: str, eval_config: BenchmarkEva
         batch_size=eval_config.batch_size,
         max_new_tokens=eval_config.max_new_tokens,
     )
+    global_step = getattr(getattr(trainer, "state", None), "global_step", None)
+    _log_benchmark_metrics_to_wandb(metrics, global_step=global_step)
 
     # Display results
     table = Table(title="Benchmark Evaluation Results")
@@ -66,11 +93,39 @@ def cleanup_trainer_callbacks(trainer) -> None:
             cleanup()
 
 
+def run_final_trainer_evaluation(console, trainer):
+    eval_dataset = getattr(trainer, "eval_dataset", None)
+    evaluate = getattr(trainer, "evaluate", None)
+    if eval_dataset is None or not callable(evaluate):
+        return None
+
+    with Status("[bold blue]Running final evaluation...", console=console):
+        return evaluate(metric_key_prefix="eval")
+
+
+def should_run_final_benchmark_eval(trainer, eval_config: BenchmarkEvalConfig) -> bool:
+    global_step = getattr(getattr(trainer, "state", None), "global_step", None)
+    if global_step is None or global_step <= 0:
+        return True
+
+    eval_steps = getattr(eval_config, "eval_steps", None)
+    if eval_steps is None or eval_steps <= 0:
+        return True
+
+    return global_step % eval_steps != 0
+
+
 def run_trainer_training(
-    trainer, cleanup_trainer_callbacks_fn, resume_from_checkpoint=None
+    trainer,
+    cleanup_trainer_callbacks_fn,
+    resume_from_checkpoint=None,
+    final_evaluation_fn=None,
+    final_evaluation_enabled=True,
 ) -> None:
     try:
         trainer.train(resume_from_checkpoint=resume_from_checkpoint)
+        if final_evaluation_enabled and callable(final_evaluation_fn):
+            final_evaluation_fn(trainer)
     finally:
         cleanup_trainer_callbacks_fn(trainer)
 

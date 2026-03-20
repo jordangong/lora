@@ -10,6 +10,7 @@ from torch import nn
 
 import lora_finetune.train as train_module
 from lora_finetune.config import (
+    BenchmarkEvalConfig,
     Config,
     DataConfig,
     DPOConfig,
@@ -113,6 +114,282 @@ class TestTrainLlm:
         assert trainer.optimizer is None
         assert trainer.lr_scheduler is None
         assert trainer.accelerator.free_memory_calls == 1
+
+    def test_run_trainer_training_runs_final_eval_before_callback_cleanup(self):
+        events = []
+
+        class CleanupCallback:
+            def cleanup(self):
+                events.append("cleanup")
+
+        class FakeTrainer:
+            def __init__(self):
+                self.eval_dataset = object()
+                self.callback_handler = SimpleNamespace(callbacks=[CleanupCallback()])
+
+            def train(self, resume_from_checkpoint=None):
+                events.append(("train", resume_from_checkpoint))
+
+            def evaluate(self, metric_key_prefix="eval"):
+                events.append(("evaluate", metric_key_prefix))
+                return {"eval_loss": 0.1}
+
+        trainer = FakeTrainer()
+
+        train_module._run_trainer_training(trainer, resume_from_checkpoint="checkpoint-7")
+
+        assert events == [
+            ("train", "checkpoint-7"),
+            ("evaluate", "eval"),
+            "cleanup",
+        ]
+
+    def test_run_trainer_training_skips_final_eval_without_eval_dataset(self):
+        events = []
+
+        class CleanupCallback:
+            def cleanup(self):
+                events.append("cleanup")
+
+        class FakeTrainer:
+            def __init__(self):
+                self.eval_dataset = None
+                self.callback_handler = SimpleNamespace(callbacks=[CleanupCallback()])
+
+            def train(self, resume_from_checkpoint=None):
+                events.append(("train", resume_from_checkpoint))
+
+            def evaluate(self, metric_key_prefix="eval"):
+                events.append(("evaluate", metric_key_prefix))
+                return {"eval_loss": 0.1}
+
+        trainer = FakeTrainer()
+
+        train_module._run_trainer_training(trainer)
+
+        assert events == [
+            ("train", None),
+            "cleanup",
+        ]
+
+    def test_run_trainer_training_skips_final_eval_when_disabled(self):
+        events = []
+
+        class CleanupCallback:
+            def cleanup(self):
+                events.append("cleanup")
+
+        class FakeTrainer:
+            def __init__(self):
+                self.eval_dataset = object()
+                self.callback_handler = SimpleNamespace(callbacks=[CleanupCallback()])
+
+            def train(self, resume_from_checkpoint=None):
+                events.append(("train", resume_from_checkpoint))
+
+            def evaluate(self, metric_key_prefix="eval"):
+                events.append(("evaluate", metric_key_prefix))
+                return {"eval_loss": 0.1}
+
+        trainer = FakeTrainer()
+
+        train_module._run_trainer_training(trainer, final_evaluation_enabled=False)
+
+        assert events == [
+            ("train", None),
+            "cleanup",
+        ]
+
+    def test_run_benchmark_eval_logs_metrics_to_wandb_with_trainer_step(self, monkeypatch):
+        logged = []
+
+        monkeypatch.setattr(train_module, "_ensure_runtime_imports", lambda: None)
+        monkeypatch.setattr(
+            train_module,
+            "run_lighteval",
+            lambda **kwargs: {"gsm8k_0|expr_gold_metric": 0.42},
+        )
+        monkeypatch.setattr(train_module.console, "print", lambda *args, **kwargs: None)
+        monkeypatch.setitem(
+            __import__("sys").modules,
+            "wandb",
+            SimpleNamespace(
+                run=object(), log=lambda payload, step=None: logged.append((payload, step))
+            ),
+        )
+
+        trainer = SimpleNamespace(state=SimpleNamespace(global_step=321))
+
+        train_module.run_benchmark_eval(
+            model=nn.Linear(2, 2),
+            model_name="test-model",
+            eval_config=BenchmarkEvalConfig(enabled=True, tasks="gsm8k"),
+            trainer=trainer,
+        )
+
+        assert logged == [
+            (
+                {
+                    "benchmark/gsm8k_0|expr_gold_metric": 0.42,
+                    "train/global_step": 321,
+                },
+                321,
+            )
+        ]
+
+    def test_train_llm_forwards_trainer_to_post_training_benchmark_eval(self, monkeypatch):
+        model = nn.Linear(10, 5)
+        dataset = DatasetDict({"train": Dataset.from_dict({"text": ["hello"]})})
+        config = Config(
+            model=ModelConfig(model_type="causal_lm"),
+            data=DataConfig(preprocessing_num_workers=1),
+            training=TrainingConfig(
+                output_dir="./test-output",
+                eval_strategy="no",
+                load_best_model_at_end=False,
+                report_to="none",
+                llm_trainer="transformers",
+            ),
+            benchmark_eval=BenchmarkEvalConfig(enabled=True, tasks="gsm8k"),
+        )
+
+        class MockTokenizer:
+            pad_token_id = 0
+
+        trainer = SimpleNamespace(state=SimpleNamespace(global_step=77))
+        benchmark_calls = []
+        training_calls = []
+
+        monkeypatch.setattr(
+            train_module,
+            "load_model_and_tokenizer",
+            lambda model_config, max_seq_length=None: (model, MockTokenizer()),
+        )
+        monkeypatch.setattr(train_module, "get_llm_target_modules", lambda model_name: ["q_proj"])
+        monkeypatch.setattr(train_module, "get_peft_model_with_lora", lambda *args, **kwargs: model)
+        monkeypatch.setattr(
+            train_module, "prepare_model_for_training", lambda *args, **kwargs: model
+        )
+        monkeypatch.setattr(train_module, "print_model_size", lambda *args, **kwargs: None)
+        monkeypatch.setattr(train_module, "load_text_dataset", lambda data_config: dataset)
+        monkeypatch.setattr(train_module, "get_text_collator", lambda tokenizer: "collator")
+        monkeypatch.setattr(
+            train_module,
+            "preprocess_text_dataset",
+            lambda raw_dataset, tokenizer, data_config, shuffle_seed=None: raw_dataset,
+        )
+        monkeypatch.setattr(train_module, "create_trainer", lambda **kwargs: trainer)
+        monkeypatch.setattr(
+            train_module,
+            "_run_trainer_training",
+            lambda current_trainer, resume_from_checkpoint=None, final_evaluation_enabled=True: (
+                training_calls.append(
+                    {
+                        "trainer": current_trainer,
+                        "resume_from_checkpoint": resume_from_checkpoint,
+                        "final_evaluation_enabled": final_evaluation_enabled,
+                    }
+                )
+            ),
+        )
+        monkeypatch.setattr(
+            train_module, "_save_and_maybe_push_model", lambda current_trainer, config: None
+        )
+        monkeypatch.setattr(
+            train_module,
+            "run_benchmark_eval",
+            lambda model, model_name, eval_config, trainer=None: benchmark_calls.append(
+                {
+                    "model": model,
+                    "model_name": model_name,
+                    "eval_config": eval_config,
+                    "trainer": trainer,
+                }
+            ),
+        )
+
+        train_module.train_llm(config)
+
+        assert training_calls == [
+            {
+                "trainer": trainer,
+                "resume_from_checkpoint": None,
+                "final_evaluation_enabled": False,
+            }
+        ]
+        assert len(benchmark_calls) == 1
+        assert benchmark_calls[0]["model"] is model
+        assert benchmark_calls[0]["model_name"] == config.model.model_name_or_path
+        assert benchmark_calls[0]["eval_config"] is config.benchmark_eval
+        assert benchmark_calls[0]["trainer"] is trainer
+
+    def test_train_llm_skips_duplicate_post_training_benchmark_eval(self, monkeypatch):
+        model = nn.Linear(10, 5)
+        dataset = DatasetDict({"train": Dataset.from_dict({"text": ["hello"]})})
+        config = Config(
+            model=ModelConfig(model_type="causal_lm"),
+            data=DataConfig(preprocessing_num_workers=1),
+            training=TrainingConfig(
+                output_dir="./test-output",
+                eval_strategy="steps",
+                load_best_model_at_end=False,
+                report_to="none",
+                llm_trainer="transformers",
+            ),
+            benchmark_eval=BenchmarkEvalConfig(enabled=True, tasks="gsm8k", eval_steps=100),
+        )
+
+        class MockTokenizer:
+            pad_token_id = 0
+
+        trainer = SimpleNamespace(state=SimpleNamespace(global_step=100))
+        benchmark_calls = []
+
+        monkeypatch.setattr(
+            train_module,
+            "load_model_and_tokenizer",
+            lambda model_config, max_seq_length=None: (model, MockTokenizer()),
+        )
+        monkeypatch.setattr(train_module, "get_llm_target_modules", lambda model_name: ["q_proj"])
+        monkeypatch.setattr(train_module, "get_peft_model_with_lora", lambda *args, **kwargs: model)
+        monkeypatch.setattr(
+            train_module, "prepare_model_for_training", lambda *args, **kwargs: model
+        )
+        monkeypatch.setattr(train_module, "print_model_size", lambda *args, **kwargs: None)
+        monkeypatch.setattr(train_module, "load_text_dataset", lambda data_config: dataset)
+        monkeypatch.setattr(train_module, "get_text_collator", lambda tokenizer: "collator")
+        monkeypatch.setattr(
+            train_module,
+            "preprocess_text_dataset",
+            lambda raw_dataset, tokenizer, data_config, shuffle_seed=None: raw_dataset,
+        )
+        monkeypatch.setattr(train_module, "create_trainer", lambda **kwargs: trainer)
+        monkeypatch.setattr(
+            train_module,
+            "_run_trainer_training",
+            lambda current_trainer, resume_from_checkpoint=None, final_evaluation_enabled=True: (
+                None
+            ),
+        )
+        monkeypatch.setattr(
+            train_module, "_save_and_maybe_push_model", lambda current_trainer, config: None
+        )
+        monkeypatch.setattr(
+            train_module,
+            "run_benchmark_eval",
+            lambda model, model_name, eval_config, trainer=None: benchmark_calls.append(
+                {
+                    "model": model,
+                    "model_name": model_name,
+                    "eval_config": eval_config,
+                    "trainer": trainer,
+                }
+            ),
+        )
+
+        train_module.train_llm(config)
+
+        assert benchmark_calls == []
 
     def test_train_llm_uses_trl_native_dataset_for_conversational_data_when_eos_append_disabled(
         self, monkeypatch
