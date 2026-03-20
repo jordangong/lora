@@ -553,6 +553,30 @@ class TestTrainLlm:
         assert peft_calls[0]["random_state"] == 123
         assert peft_calls[0]["max_seq_length"] == 4096
 
+    def test_train_llm_bootstraps_unsloth_before_runtime_imports(self, monkeypatch):
+        events = []
+        config = Config(
+            model=ModelConfig(model_type="causal_lm", use_unsloth=True),
+            training=TrainingConfig(output_dir="./test-output", eval_strategy="no"),
+        )
+
+        monkeypatch.setattr(
+            "lora_finetune._optional_unsloth.ensure_unsloth_imported",
+            lambda: events.append("bootstrap"),
+        )
+        monkeypatch.setattr(
+            train_module, "_ensure_runtime_imports", lambda: events.append("runtime")
+        )
+        monkeypatch.setattr(
+            train_module.imported_train_modes,
+            "train_llm",
+            lambda cfg, deps, logger: events.append("train_llm"),
+        )
+
+        train_module.train_llm(config)
+
+        assert events == ["bootstrap", "runtime", "train_llm"]
+
     def test_train_llm_cleans_up_callbacks_on_keyboard_interrupt(self, monkeypatch):
         model = nn.Linear(10, 5)
         dataset = DatasetDict({"train": Dataset.from_dict({"text": ["hello"]})})
