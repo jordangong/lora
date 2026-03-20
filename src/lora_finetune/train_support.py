@@ -9,6 +9,28 @@ from rich.status import Status
 from rich.table import Table
 
 from .config import BenchmarkEvalConfig, Config
+from .trainer_hpo import _iter_hpo_parameter_names
+
+
+def _resolve_best_run_hpo_parameters(
+    config: Config, hyperparameters: dict[str, Any]
+) -> dict[str, Any]:
+    resolved_parameters: dict[str, Any] = {}
+    for parameter_name in _iter_hpo_parameter_names(config.hpo):
+        if parameter_name in hyperparameters:
+            resolved_parameters[parameter_name] = hyperparameters[parameter_name]
+            continue
+
+        if "." in parameter_name:
+            section_name, field_name = parameter_name.split(".", 1)
+        else:
+            section_name, field_name = "training", parameter_name
+
+        section_values = hyperparameters.get(section_name)
+        if isinstance(section_values, dict) and field_name in section_values:
+            resolved_parameters[parameter_name] = section_values[field_name]
+
+    return resolved_parameters
 
 
 def run_benchmark_eval(module, model, model_name: str, eval_config: BenchmarkEvalConfig) -> None:
@@ -44,7 +66,9 @@ def cleanup_trainer_callbacks(trainer) -> None:
             cleanup()
 
 
-def run_trainer_training(trainer, cleanup_trainer_callbacks_fn, resume_from_checkpoint=None) -> None:
+def run_trainer_training(
+    trainer, cleanup_trainer_callbacks_fn, resume_from_checkpoint=None
+) -> None:
     try:
         trainer.train(resume_from_checkpoint=resume_from_checkpoint)
     finally:
@@ -107,6 +131,10 @@ def save_hpo_best_config(module, config: Config, best_run: Any) -> None:
     if not hyperparameters:
         return
 
+    resolved_hyperparameters = _resolve_best_run_hpo_parameters(config, hyperparameters)
+    if not resolved_hyperparameters:
+        return
+
     best_config = copy.deepcopy(config)
     module.apply_hpo_parameters_to_config_sections(
         {
@@ -115,14 +143,12 @@ def save_hpo_best_config(module, config: Config, best_run: Any) -> None:
             "dpo": best_config.dpo,
             "grpo": best_config.grpo,
         },
-        hyperparameters,
+        resolved_hyperparameters,
     )
     os.makedirs(best_config.training.output_dir, exist_ok=True)
     best_config_path = os.path.join(best_config.training.output_dir, "best_hpo_config.yaml")
     best_config.to_yaml(best_config_path)
-    module.console.print(
-        Panel(f"[bold blue]Saved best HPO config:[/bold blue] {best_config_path}")
-    )
+    module.console.print(Panel(f"[bold blue]Saved best HPO config:[/bold blue] {best_config_path}"))
 
 
 def run_with_status(get_warning_handler, console, status_message: str, fn):
@@ -137,10 +163,12 @@ def run_with_status(get_warning_handler, console, status_message: str, fn):
 
 
 def resolve_default_target_modules(config: Config, resolver) -> None:
-    if (
-        config.lora.target_modules is None
-        or config.lora.target_modules == ["q_proj", "v_proj", "k_proj", "o_proj"]
-    ):
+    if config.lora.target_modules is None or config.lora.target_modules == [
+        "q_proj",
+        "v_proj",
+        "k_proj",
+        "o_proj",
+    ]:
         config.lora.target_modules = resolver(config.model.model_name_or_path)
 
 
