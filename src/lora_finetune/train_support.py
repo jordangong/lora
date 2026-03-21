@@ -34,10 +34,13 @@ def _resolve_best_run_hpo_parameters(
     return resolved_parameters
 
 
-def _log_benchmark_metrics_to_wandb(
-    metrics: dict[str, Any], global_step: int | None = None
+def _log_metrics_to_wandb(
+    metrics: dict[str, Any], namespace: str, global_step: int | None = None
 ) -> None:
-    prefixed_metrics = {f"benchmark/{key}": value for key, value in metrics.items()}
+    if not metrics:
+        return
+
+    prefixed_metrics = {f"{namespace}/{key}": value for key, value in metrics.items()}
     if global_step is not None:
         prefixed_metrics["train/global_step"] = global_step
     try:
@@ -51,6 +54,28 @@ def _log_benchmark_metrics_to_wandb(
             wandb.log(prefixed_metrics, step=global_step)
     except ImportError:
         pass
+
+
+def _extract_prefixed_metrics(metrics: dict[str, Any], prefix: str) -> dict[str, Any]:
+    prefix_with_separator = f"{prefix}_"
+    extracted_metrics = {}
+    for key, value in metrics.items():
+        if key.startswith(prefix_with_separator):
+            extracted_metrics[key[len(prefix_with_separator) :]] = value
+    return extracted_metrics
+
+
+def _pop_wandb_callback(trainer):
+    pop_callback = getattr(trainer, "pop_callback", None)
+    if not callable(pop_callback):
+        return None
+
+    try:
+        from transformers.integrations import WandbCallback
+    except ImportError:
+        return None
+
+    return pop_callback(WandbCallback)
 
 
 def run_benchmark_eval(
@@ -72,7 +97,7 @@ def run_benchmark_eval(
         max_new_tokens=eval_config.max_new_tokens,
     )
     global_step = getattr(getattr(trainer, "state", None), "global_step", None)
-    _log_benchmark_metrics_to_wandb(metrics, global_step=global_step)
+    _log_metrics_to_wandb(metrics, namespace="final/benchmark", global_step=global_step)
 
     # Display results
     table = Table(title="Benchmark Evaluation Results")
@@ -100,8 +125,23 @@ def run_final_trainer_evaluation(console, trainer):
     if eval_dataset is None or not callable(evaluate):
         return None
 
-    with Status("[bold blue]Running final evaluation...", console=console):
-        return evaluate(metric_key_prefix="eval")
+    global_step = getattr(getattr(trainer, "state", None), "global_step", None)
+    wandb_callback = _pop_wandb_callback(trainer)
+    try:
+        with Status("[bold blue]Running final evaluation...", console=console):
+            metrics = evaluate(metric_key_prefix="final_eval")
+    finally:
+        if wandb_callback is not None:
+            add_callback = getattr(trainer, "add_callback", None)
+            if callable(add_callback):
+                add_callback(wandb_callback)
+
+    _log_metrics_to_wandb(
+        _extract_prefixed_metrics(metrics, prefix="final_eval"),
+        namespace="final/eval",
+        global_step=global_step,
+    )
+    return metrics
 
 
 class _FinalEvaluationCallback(TrainerCallback):

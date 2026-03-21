@@ -132,7 +132,7 @@ class TestTrainLlm:
 
             def evaluate(self, metric_key_prefix="eval"):
                 events.append(("evaluate", metric_key_prefix))
-                return {"eval_loss": 0.1}
+                return {"final_eval_loss": 0.1}
 
         trainer = FakeTrainer()
 
@@ -140,7 +140,7 @@ class TestTrainLlm:
 
         assert events == [
             ("train", "checkpoint-7"),
-            ("evaluate", "eval"),
+            ("evaluate", "final_eval"),
             "cleanup",
         ]
 
@@ -161,7 +161,7 @@ class TestTrainLlm:
 
             def evaluate(self, metric_key_prefix="eval"):
                 events.append(("evaluate", metric_key_prefix))
-                return {"eval_loss": 0.1}
+                return {"final_eval_loss": 0.1}
 
         trainer = FakeTrainer()
 
@@ -189,7 +189,7 @@ class TestTrainLlm:
 
             def evaluate(self, metric_key_prefix="eval"):
                 events.append(("evaluate", metric_key_prefix))
-                return {"eval_loss": 0.1}
+                return {"final_eval_loss": 0.1}
 
         trainer = FakeTrainer()
 
@@ -228,7 +228,7 @@ class TestTrainLlm:
 
             def evaluate(self, metric_key_prefix="eval"):
                 events.append(("evaluate", metric_key_prefix))
-                return {"eval_loss": 0.1}
+                return {"final_eval_loss": 0.1}
 
         trainer = FakeTrainer()
 
@@ -236,8 +236,65 @@ class TestTrainLlm:
 
         assert events == [
             ("train", "checkpoint-9"),
-            ("evaluate", "eval"),
+            ("evaluate", "final_eval"),
             "cleanup",
+        ]
+
+    def test_run_final_trainer_evaluation_logs_dedicated_final_namespace(self, monkeypatch):
+        logged = []
+        removed_callback_types = []
+        restored_callbacks = []
+        wandb_callback = object()
+
+        monkeypatch.setitem(
+            __import__("sys").modules,
+            "wandb",
+            SimpleNamespace(
+                run=object(),
+                log=lambda payload, step=None: logged.append((payload, step)),
+            ),
+        )
+
+        class FakeTrainer:
+            def __init__(self):
+                self.eval_dataset = object()
+                self.state = SimpleNamespace(global_step=123)
+
+            def pop_callback(self, callback_type):
+                removed_callback_types.append(callback_type.__name__)
+                return wandb_callback
+
+            def add_callback(self, callback):
+                restored_callbacks.append(callback)
+
+            def evaluate(self, metric_key_prefix="eval"):
+                assert metric_key_prefix == "final_eval"
+                return {
+                    "final_eval_loss": 0.1,
+                    "final_eval_runtime": 2.5,
+                    "train_loss": 9.9,
+                }
+
+        trainer = FakeTrainer()
+
+        metrics = train_module._run_final_trainer_evaluation(trainer)
+
+        assert metrics == {
+            "final_eval_loss": 0.1,
+            "final_eval_runtime": 2.5,
+            "train_loss": 9.9,
+        }
+        assert removed_callback_types == ["WandbCallback"]
+        assert restored_callbacks == [wandb_callback]
+        assert logged == [
+            (
+                {
+                    "final/eval/loss": 0.1,
+                    "final/eval/runtime": 2.5,
+                    "train/global_step": 123,
+                },
+                123,
+            )
         ]
 
     def test_run_benchmark_eval_logs_metrics_to_wandb_with_trainer_step(self, monkeypatch):
@@ -270,7 +327,7 @@ class TestTrainLlm:
         assert logged == [
             (
                 {
-                    "benchmark/gsm8k_0|expr_gold_metric": 0.42,
+                    "final/benchmark/gsm8k_0|expr_gold_metric": 0.42,
                     "train/global_step": 321,
                 },
                 321,
