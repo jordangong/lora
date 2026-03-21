@@ -103,6 +103,28 @@ def run_final_trainer_evaluation(console, trainer):
         return evaluate(metric_key_prefix="eval")
 
 
+class _FinalEvaluationCallback:
+    def __init__(self, trainer, final_evaluation_fn):
+        self.trainer = trainer
+        self.final_evaluation_fn = final_evaluation_fn
+        self.ran = False
+
+    def on_train_end(self, args, state, control, **kwargs):
+        self.final_evaluation_fn(self.trainer)
+        self.ran = True
+        return control
+
+
+def _attach_final_evaluation_callback(trainer, final_evaluation_fn):
+    add_callback = getattr(trainer, "add_callback", None)
+    if not callable(add_callback):
+        return None
+
+    callback = _FinalEvaluationCallback(trainer, final_evaluation_fn)
+    add_callback(callback)
+    return callback
+
+
 def should_run_final_benchmark_eval(trainer, eval_config: BenchmarkEvalConfig) -> bool:
     global_step = getattr(getattr(trainer, "state", None), "global_step", None)
     if global_step is None or global_step <= 0:
@@ -122,9 +144,18 @@ def run_trainer_training(
     final_evaluation_fn=None,
     final_evaluation_enabled=True,
 ) -> None:
+    final_evaluation_callback = None
     try:
-        trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         if final_evaluation_enabled and callable(final_evaluation_fn):
+            final_evaluation_callback = _attach_final_evaluation_callback(
+                trainer, final_evaluation_fn
+            )
+        trainer.train(resume_from_checkpoint=resume_from_checkpoint)
+        if (
+            final_evaluation_enabled
+            and callable(final_evaluation_fn)
+            and (final_evaluation_callback is None or not final_evaluation_callback.ran)
+        ):
             final_evaluation_fn(trainer)
     finally:
         cleanup_trainer_callbacks_fn(trainer)

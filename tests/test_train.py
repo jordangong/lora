@@ -200,6 +200,42 @@ class TestTrainLlm:
             "cleanup",
         ]
 
+    def test_run_trainer_training_runs_final_eval_from_train_end_callback_once(self):
+        events = []
+
+        class CleanupCallback:
+            def cleanup(self):
+                events.append("cleanup")
+
+        class FakeTrainer:
+            def __init__(self):
+                self.eval_dataset = object()
+                self.callback_handler = SimpleNamespace(callbacks=[CleanupCallback()])
+
+            def add_callback(self, callback):
+                self.callback_handler.callbacks.append(callback)
+
+            def train(self, resume_from_checkpoint=None):
+                events.append(("train", resume_from_checkpoint))
+                for callback in list(self.callback_handler.callbacks):
+                    on_train_end = getattr(callback, "on_train_end", None)
+                    if callable(on_train_end):
+                        on_train_end(None, None, "control")
+
+            def evaluate(self, metric_key_prefix="eval"):
+                events.append(("evaluate", metric_key_prefix))
+                return {"eval_loss": 0.1}
+
+        trainer = FakeTrainer()
+
+        train_module._run_trainer_training(trainer, resume_from_checkpoint="checkpoint-9")
+
+        assert events == [
+            ("train", "checkpoint-9"),
+            ("evaluate", "eval"),
+            "cleanup",
+        ]
+
     def test_run_benchmark_eval_logs_metrics_to_wandb_with_trainer_step(self, monkeypatch):
         logged = []
 
