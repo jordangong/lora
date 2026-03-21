@@ -3,7 +3,6 @@
 import logging
 import os
 import tempfile
-import warnings
 from typing import Any, Dict, Optional
 
 import torch
@@ -98,6 +97,51 @@ def _import_lighteval_components() -> Dict[str, Any]:
     }
 
 
+def _get_module_device(module) -> Optional[torch.device]:
+    for parameter in module.parameters():
+        return parameter.device
+    for buffer in module.buffers():
+        return buffer.device
+    return None
+
+
+def _normalize_unsloth_target_device(device) -> Optional[int | str]:
+    if device is None:
+        if torch.cuda.is_available():
+            return torch.cuda.current_device()
+        return "cpu"
+    if isinstance(device, int):
+        return device
+    if isinstance(device, str):
+        if device == "cuda":
+            if torch.cuda.is_available():
+                return torch.cuda.current_device()
+            return "cpu"
+        return device
+    if isinstance(device, torch.device):
+        if device.type == "cuda":
+            if device.index is not None:
+                return device.index
+            if torch.cuda.is_available():
+                return torch.cuda.current_device()
+            return "cpu"
+        if device.type == "cpu":
+            return "cpu"
+        return str(device)
+    return device
+
+
+def _normalize_unsloth_layer_device_indices(model) -> None:
+    fallback_device = _normalize_unsloth_target_device(_get_module_device(model))
+    for module in model.modules():
+        if not hasattr(module, "_per_layer_device_index"):
+            continue
+        if getattr(module, "_per_layer_device_index") is not None:
+            continue
+        module_device = _normalize_unsloth_target_device(_get_module_device(module))
+        setattr(module, "_per_layer_device_index", module_device or fallback_device)
+
+
 def run_lighteval(
     model: PreTrainedModel,
     model_name: str,
@@ -132,6 +176,8 @@ def run_lighteval(
     pipeline_cls = components["Pipeline"]
     pipeline_parameters_cls = components["PipelineParameters"]
     transformers_model_module = components["transformers_model_module"]
+
+    _normalize_unsloth_layer_device_indices(model)
 
     pipeline_params = pipeline_parameters_cls(
         launcher_type=parallelism_manager.NONE,
@@ -183,6 +229,9 @@ def run_lighteval(
                 model_config=model_config,
                 model=model,
             )
+            pipeline_model = getattr(pipeline, "model", None)
+            if pipeline_model is not None and hasattr(pipeline_model, "model"):
+                _normalize_unsloth_layer_device_indices(pipeline_model.model)
 
             # Capture any loggers created during Pipeline init
             configure_warning_loggers(["lighteval"], warning_handler, saved=saved_logging)

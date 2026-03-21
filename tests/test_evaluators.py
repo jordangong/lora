@@ -162,6 +162,42 @@ class TestRunLighteval:
         assert model_config_kwargs["tokenizer"] == str(model_path)
         assert model_config_kwargs["cache_dir"]
 
+    def test_run_lighteval_normalizes_unsloth_layer_device_indices(self):
+        """Test that benchmark eval repairs missing Unsloth per-layer device indices."""
+
+        class FakeLayer(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.weight = torch.nn.Parameter(torch.zeros(1))
+                self._per_layer_device_index = None
+
+        class FakeModel(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.layer = FakeLayer()
+
+        wrapped_model = FakeModel()
+        input_model = FakeModel()
+        mock_pipeline = MagicMock()
+        mock_pipeline.model = SimpleNamespace(model=wrapped_model, cleanup=lambda: None)
+        mock_pipeline.get_results.return_value = {
+            "results": {"gsm8k_0": {"expr_gold_metric": 0.42}}
+        }
+        components, _ = _mock_lighteval_components(mock_pipeline)
+
+        with patch(
+            "lora_finetune.evaluators.lighteval_evaluator._import_lighteval_components",
+            return_value=components,
+        ):
+            run_lighteval(
+                model=input_model,
+                model_name="test-model",
+                tasks="gsm8k",
+            )
+
+        assert input_model.layer._per_layer_device_index == "cpu"
+        assert wrapped_model.layer._per_layer_device_index == "cpu"
+
 
 class TestLightEvalLoggingHelpers:
     """Tests for lighteval logging setup/restore helpers."""
