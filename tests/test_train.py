@@ -218,6 +218,10 @@ class TestTrainLlm:
             def train(self, resume_from_checkpoint=None):
                 events.append(("train", resume_from_checkpoint))
                 for callback in list(self.callback_handler.callbacks):
+                    on_train_begin = getattr(callback, "on_train_begin", None)
+                    if callable(on_train_begin):
+                        on_train_begin(None, None, "control")
+                for callback in list(self.callback_handler.callbacks):
                     on_train_end = getattr(callback, "on_train_end", None)
                     if callable(on_train_end):
                         on_train_end(None, None, "control")

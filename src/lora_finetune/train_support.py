@@ -7,6 +7,7 @@ import torch
 from rich.panel import Panel
 from rich.status import Status
 from rich.table import Table
+from transformers.trainer_callback import TrainerCallback
 
 from .config import BenchmarkEvalConfig, Config
 from .trainer_hpo import _iter_hpo_parameter_names
@@ -103,7 +104,7 @@ def run_final_trainer_evaluation(console, trainer):
         return evaluate(metric_key_prefix="eval")
 
 
-class _FinalEvaluationCallback:
+class _FinalEvaluationCallback(TrainerCallback):
     def __init__(self, trainer, final_evaluation_fn):
         self.trainer = trainer
         self.final_evaluation_fn = final_evaluation_fn
