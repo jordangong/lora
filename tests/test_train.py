@@ -356,6 +356,7 @@ class TestTrainLlm:
         trainer = SimpleNamespace(state=SimpleNamespace(global_step=77))
         benchmark_calls = []
         training_calls = []
+        final_eval_calls = []
 
         monkeypatch.setattr(
             train_module,
@@ -379,18 +380,24 @@ class TestTrainLlm:
         monkeypatch.setattr(
             train_module,
             "_run_trainer_training",
-            lambda current_trainer, resume_from_checkpoint=None, final_evaluation_enabled=True: (
+            lambda current_trainer, resume_from_checkpoint=None, final_evaluation_enabled=True, final_evaluation_fn=None: (
                 training_calls.append(
                     {
                         "trainer": current_trainer,
                         "resume_from_checkpoint": resume_from_checkpoint,
                         "final_evaluation_enabled": final_evaluation_enabled,
+                        "final_evaluation_fn": final_evaluation_fn,
                     }
                 )
             ),
         )
         monkeypatch.setattr(
             train_module, "_save_and_maybe_push_model", lambda current_trainer, config: None
+        )
+        monkeypatch.setattr(
+            train_module,
+            "_run_final_trainer_evaluation",
+            lambda current_trainer: final_eval_calls.append(current_trainer),
         )
         monkeypatch.setattr(
             train_module,
@@ -411,9 +418,13 @@ class TestTrainLlm:
             {
                 "trainer": trainer,
                 "resume_from_checkpoint": None,
-                "final_evaluation_enabled": False,
+                "final_evaluation_enabled": True,
+                "final_evaluation_fn": training_calls[0]["final_evaluation_fn"],
             }
         ]
+        assert callable(training_calls[0]["final_evaluation_fn"])
+        training_calls[0]["final_evaluation_fn"](trainer)
+        assert final_eval_calls == []
         assert len(benchmark_calls) == 1
         assert benchmark_calls[0]["model"] is model
         assert benchmark_calls[0]["model_name"] == config.model.model_name_or_path
@@ -464,12 +475,17 @@ class TestTrainLlm:
         monkeypatch.setattr(
             train_module,
             "_run_trainer_training",
-            lambda current_trainer, resume_from_checkpoint=None, final_evaluation_enabled=True: (
-                None
+            lambda current_trainer, resume_from_checkpoint=None, final_evaluation_enabled=True, final_evaluation_fn=None: (
+                final_evaluation_fn(current_trainer)
             ),
         )
         monkeypatch.setattr(
             train_module, "_save_and_maybe_push_model", lambda current_trainer, config: None
+        )
+        monkeypatch.setattr(
+            train_module,
+            "_run_final_trainer_evaluation",
+            lambda current_trainer: None,
         )
         monkeypatch.setattr(
             train_module,

@@ -131,26 +131,31 @@ def train_llm(config: Config, deps, logger) -> None:
         if deps._run_hpo_if_enabled(trainer, config):
             return
 
+    should_run_final_eval = str(config.training.eval_strategy).lower() != "no"
+    should_run_final_benchmark_eval = config.benchmark_eval.enabled and trainer_type == "sft"
+
+    def _run_final_training_actions(current_trainer):
+        if should_run_final_eval:
+            deps._run_final_trainer_evaluation(current_trainer)
+
+        if should_run_final_benchmark_eval and deps._should_run_final_benchmark_eval(
+            current_trainer, config.benchmark_eval
+        ):
+            deps.run_benchmark_eval(
+                model,
+                config.model.model_name_or_path,
+                config.benchmark_eval,
+                trainer=current_trainer,
+            )
+
     deps._run_trainer_training(
         trainer,
         resume_from_checkpoint=config.training.resume_from_checkpoint,
-        final_evaluation_enabled=str(config.training.eval_strategy).lower() != "no",
+        final_evaluation_enabled=should_run_final_eval or should_run_final_benchmark_eval,
+        final_evaluation_fn=_run_final_training_actions,
     )
 
     deps._save_and_maybe_push_model(trainer, config)
-
-    # Run benchmark evaluation if enabled
-    if (
-        config.benchmark_eval.enabled
-        and trainer_type == "sft"
-        and deps._should_run_final_benchmark_eval(trainer, config.benchmark_eval)
-    ):
-        deps.run_benchmark_eval(
-            model,
-            config.model.model_name_or_path,
-            config.benchmark_eval,
-            trainer=trainer,
-        )
 
 
 def train_vision(config: Config, deps) -> None:

@@ -101,13 +101,19 @@ def _should_run_final_benchmark_eval(trainer, eval_config: BenchmarkEvalConfig) 
 
 
 def _run_trainer_training(
-    trainer, resume_from_checkpoint=None, final_evaluation_enabled=True
+    trainer,
+    resume_from_checkpoint=None,
+    final_evaluation_enabled=True,
+    final_evaluation_fn=None,
 ) -> None:
+    if final_evaluation_fn is None:
+        final_evaluation_fn = _run_final_trainer_evaluation
+
     _get_train_support().run_trainer_training(
         trainer,
         cleanup_trainer_callbacks_fn=_cleanup_trainer_callbacks,
         resume_from_checkpoint=resume_from_checkpoint,
-        final_evaluation_fn=_run_final_trainer_evaluation,
+        final_evaluation_fn=final_evaluation_fn,
         final_evaluation_enabled=final_evaluation_enabled,
     )
 
