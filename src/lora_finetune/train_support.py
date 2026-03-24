@@ -1,6 +1,7 @@
 import copy
 import gc
 import os
+import re
 from typing import Any
 
 import torch
@@ -32,6 +33,22 @@ def _resolve_best_run_hpo_parameters(
             resolved_parameters[parameter_name] = section_values[field_name]
 
     return resolved_parameters
+
+
+def _resolve_hpo_best_config_output_dir(config: Config) -> str:
+    output_dir = config.training.output_dir
+    sweep_name = config.hpo.sweep_name
+    if not sweep_name:
+        return output_dir
+
+    safe_sweep_name = re.sub(r"[^A-Za-z0-9._-]+", "_", str(sweep_name)).strip("._")
+    if not safe_sweep_name:
+        return output_dir
+
+    if os.path.basename(os.path.normpath(output_dir)) == safe_sweep_name:
+        return output_dir
+
+    return os.path.join(output_dir, safe_sweep_name)
 
 
 def _log_metrics_to_wandb(
@@ -305,6 +322,7 @@ def save_hpo_best_config(module, config: Config, best_run: Any) -> None:
         },
         resolved_hyperparameters,
     )
+    best_config.training.output_dir = _resolve_hpo_best_config_output_dir(best_config)
     os.makedirs(best_config.training.output_dir, exist_ok=True)
     best_config_path = os.path.join(best_config.training.output_dir, "best_hpo_config.yaml")
     best_config.to_yaml(best_config_path)

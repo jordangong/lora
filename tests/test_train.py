@@ -27,11 +27,13 @@ class TestTrainLlm:
         self, monkeypatch, tmp_path
     ):
         output_dir = tmp_path / "hpo-output"
+        sweep_name = "llama3-lora-hpo"
         config = Config(
             training=TrainingConfig(output_dir=str(output_dir), report_to="none"),
             lora=LoraConfig(r=8),
             hpo=HPOConfig(
                 enabled=True,
+                sweep_name=sweep_name,
                 parameters={
                     "learning_rate": {"values": [1e-5, 3e-5]},
                     "lora.r": {"values": [8, 16]},
@@ -57,9 +59,10 @@ class TestTrainLlm:
 
         train_module._save_hpo_best_config(config, best_run)
 
-        saved_config_path = output_dir / "best_hpo_config.yaml"
+        saved_config_path = output_dir / sweep_name / "best_hpo_config.yaml"
         assert saved_config_path.exists()
         saved_config = yaml.unsafe_load(saved_config_path.read_text())
+        assert saved_config["training"]["output_dir"] == str(output_dir / sweep_name)
         assert saved_config["training"]["learning_rate"] == pytest.approx(3e-5)
         assert saved_config["training"]["report_to"] == "none"
         assert saved_config["lora"]["r"] == 16
