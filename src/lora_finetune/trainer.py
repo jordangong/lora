@@ -19,27 +19,6 @@ from transformers import (
 from transformers.integrations import WandbCallback
 from transformers.trainer_callback import PrinterCallback
 
-try:
-    from trl import (
-        DPOConfig as TRLDPOConfig,
-    )
-    from trl import (
-        DPOTrainer,
-        GRPOTrainer,
-        SFTConfig,
-        SFTTrainer,
-    )
-    from trl import (
-        GRPOConfig as TRLGRPOConfig,
-    )
-except ImportError:
-    TRLDPOConfig = None
-    DPOTrainer = None
-    TRLGRPOConfig = None
-    GRPOTrainer = None
-    SFTConfig = None
-    SFTTrainer = None
-
 from .config import (
     BenchmarkEvalConfig,
     DataConfig,
@@ -79,11 +58,45 @@ from .trainer_metrics import (
 from .trainer_progress import RichProgressCallback
 from .utils import capture_stdout
 
+TRL_SFT_IMPORT_ERROR = None
+try:
+    from trl import SFTConfig, SFTTrainer
+except Exception as exc:
+    TRL_SFT_IMPORT_ERROR = exc
+    SFTConfig = None
+    SFTTrainer = None
+
+TRL_DPO_IMPORT_ERROR = None
+try:
+    from trl import DPOConfig as TRLDPOConfig
+    from trl import DPOTrainer
+except Exception as exc:
+    TRL_DPO_IMPORT_ERROR = exc
+    TRLDPOConfig = None
+    DPOTrainer = None
+
+TRL_GRPO_IMPORT_ERROR = None
+try:
+    from trl import GRPOConfig as TRLGRPOConfig
+    from trl import GRPOTrainer
+except Exception as exc:
+    TRL_GRPO_IMPORT_ERROR = exc
+    TRLGRPOConfig = None
+    GRPOTrainer = None
+
 logger = logging.getLogger(__name__)
 
 run_hyperparameter_search = imported_run_hyperparameter_search
 compute_metrics_for_classification = imported_compute_metrics_for_classification
 compute_metrics_for_lm = imported_compute_metrics_for_lm
+
+
+def _raise_missing_trl_dependency(
+    message: str, import_error: Optional[BaseException] = None
+) -> None:
+    if import_error is None:
+        raise ImportError(message)
+    raise ImportError(f"{message}. Original import error: {import_error}") from import_error
 
 
 def _get_training_arguments_kwargs(
@@ -171,8 +184,9 @@ def get_sft_training_arguments(
     skip_prepare_dataset: bool = True,
 ):
     if SFTConfig is None:
-        raise ImportError(
-            "TRL is required for causal LM finetuning. Install it with: pip install trl"
+        _raise_missing_trl_dependency(
+            "TRL is required for causal LM finetuning. Install it with: pip install trl",
+            TRL_SFT_IMPORT_ERROR,
         )
 
     training_args = SFTConfig(**_get_training_arguments_kwargs(config, model_config))
@@ -227,7 +241,10 @@ def get_dpo_training_arguments(
     data_config: Optional[DataConfig] = None,
 ):
     if TRLDPOConfig is None:
-        raise ImportError("TRL is required for DPO finetuning. Install it with: pip install trl")
+        _raise_missing_trl_dependency(
+            "TRL is required for DPO finetuning. Install it with: pip install trl",
+            TRL_DPO_IMPORT_ERROR,
+        )
 
     kwargs = _build_trl_config_kwargs(config, model_config)
     kwargs.update(
@@ -254,7 +271,10 @@ def get_grpo_training_arguments(
     grpo_config: ProjectGRPOConfig,
 ):
     if TRLGRPOConfig is None:
-        raise ImportError("TRL is required for GRPO finetuning. Install it with: pip install trl")
+        _raise_missing_trl_dependency(
+            "TRL is required for GRPO finetuning. Install it with: pip install trl",
+            TRL_GRPO_IMPORT_ERROR,
+        )
 
     kwargs = _build_trl_config_kwargs(config, model_config)
     kwargs.update(
@@ -686,8 +706,9 @@ def create_trainer(
     train_sample = _get_dataset_sample(train_dataset)
     if trainer_type == "sft":
         if LoraSFTTrainer is None or SFTConfig is None:
-            raise ImportError(
-                "TRL is required for causal LM finetuning. Install it with: pip install trl"
+            _raise_missing_trl_dependency(
+                "TRL is required for causal LM finetuning. Install it with: pip install trl",
+                TRL_SFT_IMPORT_ERROR,
             )
         training_args = get_sft_training_arguments(
             training_config,
@@ -707,8 +728,9 @@ def create_trainer(
         logger.info("Using TRL SFTTrainer for causal LM finetuning")
     elif trainer_type == "dpo":
         if dpo_config is None or LoraDPOTrainer is None or TRLDPOConfig is None:
-            raise ImportError(
-                "TRL is required for DPO finetuning. Install it with: pip install trl"
+            _raise_missing_trl_dependency(
+                "TRL is required for DPO finetuning. Install it with: pip install trl",
+                TRL_DPO_IMPORT_ERROR,
             )
         training_args = get_dpo_training_arguments(
             training_config,
@@ -719,8 +741,9 @@ def create_trainer(
         logger.info("Using TRL DPOTrainer for preference finetuning")
     elif trainer_type == "grpo":
         if grpo_config is None or LoraGRPOTrainer is None or TRLGRPOConfig is None:
-            raise ImportError(
-                "TRL is required for GRPO finetuning. Install it with: pip install trl"
+            _raise_missing_trl_dependency(
+                "TRL is required for GRPO finetuning. Install it with: pip install trl",
+                TRL_GRPO_IMPORT_ERROR,
             )
         training_args = get_grpo_training_arguments(
             training_config,
