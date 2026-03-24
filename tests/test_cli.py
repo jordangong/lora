@@ -206,6 +206,12 @@ class TestAddDataclassArgs:
         args = parser.parse_args(["--gradient_checkpointing"])
         assert args.gradient_checkpointing is True
 
+        args = parser.parse_args(["--gradient_checkpointing", "unsloth"])
+        assert args.gradient_checkpointing == "unsloth"
+
+        args = parser.parse_args(["--gradient_checkpointing", "false"])
+        assert args.gradient_checkpointing is False
+
         args = parser.parse_args(["--no_gradient_checkpointing"])
         assert args.no_gradient_checkpointing is True
 
@@ -344,6 +350,15 @@ class TestApplyArgsToConfig:
         _apply_args_to_config(config, args_dict)
 
         assert config.gradient_checkpointing is False
+
+    def test_apply_literal_value(self):
+        """Test applying explicit literal value to bool-or-literal field."""
+        config = TrainingConfig()
+        args_dict = {"gradient_checkpointing": "unsloth"}
+
+        _apply_args_to_config(config, args_dict)
+
+        assert config.gradient_checkpointing == "unsloth"
 
     def test_apply_tuple_from_list(self):
         """Test converting list to tuple for tuple fields."""

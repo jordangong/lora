@@ -445,7 +445,7 @@ class TestLoadModelAndTokenizerSignature:
                 bias,
                 use_gradient_checkpointing,
                 random_state,
-                max_seq_length,
+                max_seq_length=None,
                 use_rslora=False,
                 use_dora=False,
                 modules_to_save=None,
@@ -487,6 +487,100 @@ class TestLoadModelAndTokenizerSignature:
         assert captured["kwargs"]["use_dora"] is True
         assert captured["kwargs"]["modules_to_save"] == ["lm_head"]
         assert getattr(result, "_lora_finetune_unsloth_managed_gradient_checkpointing") is False
+
+    def test_get_peft_model_with_lora_uses_standard_gradient_checkpointing_for_unsloth_by_default(
+        self, monkeypatch
+    ):
+        """Test Unsloth defaults to standard checkpointing when enabled."""
+        captured = {}
+
+        class FakeModel(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.linear = torch.nn.Linear(2, 2)
+
+        class FakeFastLanguageModel:
+            @staticmethod
+            def get_peft_model(
+                model,
+                r,
+                target_modules,
+                lora_alpha,
+                lora_dropout,
+                bias,
+                use_gradient_checkpointing,
+                random_state,
+                max_seq_length=None,
+                use_rslora=False,
+                use_dora=False,
+                modules_to_save=None,
+            ):
+                captured["kwargs"] = {
+                    "use_gradient_checkpointing": use_gradient_checkpointing,
+                }
+                return model
+
+        monkeypatch.setattr(base_module, "FastLanguageModel", FakeFastLanguageModel)
+
+        model = FakeModel()
+        result = get_peft_model_with_lora(
+            model,
+            LoraConfig(),
+            model_type="causal_lm",
+            use_unsloth=True,
+            use_gradient_checkpointing=True,
+        )
+
+        assert result is model
+        assert captured["kwargs"]["use_gradient_checkpointing"] is True
+        assert getattr(result, "_lora_finetune_unsloth_managed_gradient_checkpointing") is True
+
+    def test_get_peft_model_with_lora_accepts_explicit_unsloth_gradient_checkpointing(
+        self, monkeypatch
+    ):
+        """Test explicit Unsloth checkpointing mode remains available."""
+        captured = {}
+
+        class FakeModel(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.linear = torch.nn.Linear(2, 2)
+
+        class FakeFastLanguageModel:
+            @staticmethod
+            def get_peft_model(
+                model,
+                r,
+                target_modules,
+                lora_alpha,
+                lora_dropout,
+                bias,
+                use_gradient_checkpointing,
+                random_state,
+                max_seq_length=None,
+                use_rslora=False,
+                use_dora=False,
+                modules_to_save=None,
+            ):
+                captured["kwargs"] = {
+                    "use_gradient_checkpointing": use_gradient_checkpointing,
+                }
+                return model
+
+        monkeypatch.setattr(base_module, "FastLanguageModel", FakeFastLanguageModel)
+
+        model = FakeModel()
+        result = get_peft_model_with_lora(
+            model,
+            LoraConfig(),
+            model_type="causal_lm",
+            use_unsloth=True,
+            use_gradient_checkpointing="unsloth",
+        )
+
+        assert result is model
+        assert captured["kwargs"]["use_gradient_checkpointing"] == "unsloth"
+        assert getattr(result, "_lora_finetune_unsloth_managed_gradient_checkpointing") is True
 
     def test_get_peft_model_with_lora_rejects_unsupported_unsloth_method(self, monkeypatch):
         """Test unsupported Unsloth adapter methods fail clearly."""

@@ -119,8 +119,9 @@ def _get_training_arguments_kwargs(
         if config.fsdp_config:
             fsdp_config.update(config.fsdp_config)
 
+    gradient_checkpointing_enabled = bool(config.gradient_checkpointing)
     gradient_checkpointing_kwargs = config.gradient_checkpointing_kwargs
-    if config.gradient_checkpointing and gradient_checkpointing_kwargs is None:
+    if gradient_checkpointing_enabled and gradient_checkpointing_kwargs is None:
         gradient_checkpointing_kwargs = {"use_reentrant": False}
 
     return {
@@ -147,7 +148,7 @@ def _get_training_arguments_kwargs(
         "bf16": config.bf16,
         "fp16": config.fp16,
         "tf32": config.tf32,
-        "gradient_checkpointing": config.gradient_checkpointing,
+        "gradient_checkpointing": gradient_checkpointing_enabled,
         "gradient_checkpointing_kwargs": gradient_checkpointing_kwargs,
         "optim": config.optim,
         "seed": config.seed,

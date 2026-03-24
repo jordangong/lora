@@ -34,6 +34,40 @@ def _is_list_or_str_union(type_hint: Type) -> bool:
     return False
 
 
+def _is_bool_or_literal_union(type_hint: Type) -> bool:
+    """Check if type is Union[bool, Literal[...]] (possibly Optional)."""
+    origin = get_origin(type_hint)
+    if origin is not Union:
+        return False
+    args = [arg for arg in get_args(type_hint) if arg is not type(None)]
+    has_bool = any(arg is bool for arg in args)
+    has_literal = any(
+        get_origin(arg) is not None and str(get_origin(arg)) == "typing.Literal" for arg in args
+    )
+    return has_bool and has_literal
+
+
+def _parse_bool_or_literal_value(type_hint: Type):
+    """Build an argparse parser for Union[bool, Literal[...]] values."""
+    literal_values = []
+    for arg in get_args(type_hint):
+        if get_origin(arg) is not None and str(get_origin(arg)) == "typing.Literal":
+            literal_values.extend(get_args(arg))
+
+    def _parser(value: str) -> Union[bool, str]:
+        normalized = value.lower()
+        if normalized == "true":
+            return True
+        if normalized == "false":
+            return False
+        if value in literal_values:
+            return value
+        expected_values = ["true", "false", *[str(item) for item in literal_values]]
+        raise argparse.ArgumentTypeError(f"Expected one of: {', '.join(expected_values)}")
+
+    return _parser
+
+
 def _get_base_type(type_hint: Type) -> Type:
     """Extract the base type from Optional or other generic types."""
     origin = get_origin(type_hint)
@@ -126,8 +160,21 @@ def _add_dataclass_args(
                 return f"(default: {default})"
             return ""
 
+        if _is_bool_or_literal_union(field_info.type):
+            parser.add_argument(
+                arg_name,
+                nargs="?",
+                const=True,
+                default=None,
+                type=_parse_bool_or_literal_value(field_info.type),
+                help=_build_help(help_text, default_val),
+            )
+            no_arg_name = f"--no_{prefix}{field_name}" if prefix else f"--no_{field_name}"
+            parser.add_argument(
+                no_arg_name, action="store_true", default=None, help=argparse.SUPPRESS
+            )
         # Handle boolean fields - add both --flag and --no_flag (no_ hidden from help)
-        if field_type is bool:
+        elif field_type is bool:
             if default_val is None:
                 bool_help = help_text if help_text else ""
             else:
@@ -269,7 +316,7 @@ def _apply_args_to_config(
         field_type = _get_base_type(field_info.type)
 
         # Handle --no_* flags for boolean fields
-        if field_type is bool:
+        if field_type is bool or _is_bool_or_literal_union(field_info.type):
             no_arg_name = f"no_{arg_name}"
             if args_dict.get(no_arg_name):
                 setattr(config_obj, field_name, False)

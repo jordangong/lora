@@ -29,7 +29,7 @@ from transformers import (
 )
 
 from .. import _optional_unsloth
-from ..config import LoraConfig, ModelConfig
+from ..config import GradientCheckpointingConfig, LoraConfig, ModelConfig
 from ..utils import capture_stdout, get_method_display_name
 
 logger = logging.getLogger(__name__)
@@ -268,7 +268,7 @@ def _apply_unsloth_peft_model(
     model: PreTrainedModel,
     lora_config: LoraConfig,
     is_quantized: bool = False,
-    use_gradient_checkpointing: bool = True,
+    use_gradient_checkpointing: GradientCheckpointingConfig = True,
     random_state: int = 42,
     max_seq_length: Optional[int] = None,
 ) -> Union[PreTrainedModel, PeftModel]:
@@ -288,7 +288,9 @@ def _apply_unsloth_peft_model(
             "Unsloth integration currently supports only lora, dora, loraplus, and full methods"
         )
 
-    unsloth_gradient_checkpointing = "unsloth" if use_gradient_checkpointing else False
+    unsloth_gradient_checkpointing = (
+        "unsloth" if use_gradient_checkpointing == "unsloth" else bool(use_gradient_checkpointing)
+    )
     unsloth_kwargs = {
         "r": lora_config.r,
         "target_modules": lora_config.target_modules,
@@ -503,7 +505,7 @@ def get_peft_model_with_adapter(
     model_type: str = "causal_lm",
     is_quantized: bool = False,
     use_unsloth: bool = False,
-    use_gradient_checkpointing: bool = True,
+    use_gradient_checkpointing: GradientCheckpointingConfig = True,
     random_state: int = 42,
     max_seq_length: Optional[int] = None,
 ) -> Union[PreTrainedModel, PeftModel]:
@@ -581,7 +583,7 @@ def get_peft_model_with_lora(
     model_type: str = "causal_lm",
     is_quantized: bool = False,
     use_unsloth: bool = False,
-    use_gradient_checkpointing: bool = True,
+    use_gradient_checkpointing: GradientCheckpointingConfig = True,
     random_state: int = 42,
     max_seq_length: Optional[int] = None,
 ) -> Union[PreTrainedModel, PeftModel]:

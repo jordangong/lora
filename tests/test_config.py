@@ -3,6 +3,7 @@
 import os
 import tempfile
 
+import pytest
 import yaml
 
 from lora_finetune.config import (
@@ -306,6 +307,17 @@ class TestTrainingConfig:
         assert config.learning_rate == 1e-4
         assert config.per_device_train_batch_size == 8
         assert config.gradient_accumulation_steps == 8
+
+    def test_accepts_unsloth_gradient_checkpointing_mode(self):
+        """Test explicit Unsloth checkpointing mode is accepted."""
+        config = TrainingConfig(gradient_checkpointing="unsloth")
+
+        assert config.gradient_checkpointing == "unsloth"
+
+    def test_rejects_invalid_gradient_checkpointing_mode(self):
+        """Test invalid gradient checkpointing values are rejected."""
+        with pytest.raises(ValueError, match="gradient_checkpointing"):
+            TrainingConfig(gradient_checkpointing="invalid")
 
 
 class TestBenchmarkEvalConfig:

@@ -7,6 +7,7 @@ import yaml
 
 # Supported finetuning methods
 FINETUNE_METHODS = Literal["lora", "full", "dora", "adalora", "loraplus", "ia3", "prefix_tuning"]
+GradientCheckpointingConfig = Union[bool, Literal["unsloth"]]
 
 
 @dataclass
@@ -514,8 +515,11 @@ class TrainingConfig:
     bf16: bool = field(default=True, metadata={"help": "Use bfloat16 mixed precision"})
     fp16: bool = field(default=False, metadata={"help": "Use float16 mixed precision"})
     tf32: Optional[bool] = field(default=None, metadata={"help": "Enable TF32 on Ampere GPUs"})
-    gradient_checkpointing: bool = field(
-        default=True, metadata={"help": "Enable gradient checkpointing to save memory"}
+    gradient_checkpointing: GradientCheckpointingConfig = field(
+        default=True,
+        metadata={
+            "help": "Enable gradient checkpointing to save memory, or set to 'unsloth' for Unsloth-managed checkpointing"
+        },
     )
     gradient_checkpointing_kwargs: Optional[dict] = field(
         default=None, metadata={"help": "Kwargs for gradient checkpointing"}
@@ -572,6 +576,14 @@ class TrainingConfig:
     )
     push_to_hub: bool = field(default=False, metadata={"help": "Push model to HuggingFace Hub"})
     hub_token: Optional[str] = field(default=None, metadata={"help": "HuggingFace Hub token"})
+
+    def __post_init__(self):
+        if (
+            self.gradient_checkpointing is not True
+            and self.gradient_checkpointing is not False
+            and self.gradient_checkpointing != "unsloth"
+        ):
+            raise ValueError("training.gradient_checkpointing must be true, false, or 'unsloth'")
 
 
 @dataclass

@@ -477,6 +477,21 @@ class TestGetTrainingArgumentsFunction:
 
         assert args.gradient_checkpointing_kwargs == {"use_reentrant": True}
 
+    def test_training_arguments_unsloth_gradient_checkpointing_mode_uses_boolean_flag(self):
+        """Test explicit Unsloth mode still produces a boolean TrainingArguments flag."""
+        training_config = TrainingConfig(
+            output_dir="./test-output",
+            gradient_checkpointing="unsloth",
+            bf16=False,
+            fp16=False,
+        )
+        model_config = ModelConfig()
+
+        args = get_training_arguments(training_config, model_config)
+
+        assert args.gradient_checkpointing is True
+        assert args.gradient_checkpointing_kwargs == {"use_reentrant": False}
+
     def test_training_arguments_wandb_settings(self):
         """Test TrainingArguments with wandb settings."""
         training_config = TrainingConfig(

@@ -407,7 +407,9 @@ def build_configuration_panel(config: Config, get_method_display_name) -> Panel:
     table.add_row("Learning rate", str(config.training.learning_rate))
     table.add_row(
         "Gradient checkpointing",
-        "✓" if config.training.gradient_checkpointing else "✗",
+        "✓ (unsloth)"
+        if config.training.gradient_checkpointing == "unsloth"
+        else ("✓" if config.training.gradient_checkpointing else "✗"),
     )
     if config.model.model_type == "causal_lm":
         table.add_row("Trainer type", config.training.trainer_type)
