@@ -124,6 +124,7 @@ def _run_trainer_hpo(trainer, config: Config):
         config,
         run_hyperparameter_search_fn=run_hyperparameter_search,
         cleanup_trainer_callbacks_fn=_cleanup_trainer_callbacks,
+        final_evaluation_fn=_run_final_trainer_evaluation,
     )
 
 

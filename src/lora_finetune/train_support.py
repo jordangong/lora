@@ -10,7 +10,7 @@ from rich.table import Table
 from transformers.trainer_callback import TrainerCallback
 
 from .config import BenchmarkEvalConfig, Config
-from .trainer_hpo import _iter_hpo_parameter_names
+from .trainer_hpo import _iter_hpo_parameter_names, build_hpo_compute_objective
 
 
 def _resolve_best_run_hpo_parameters(
@@ -63,6 +63,22 @@ def _extract_prefixed_metrics(metrics: dict[str, Any], prefix: str) -> dict[str,
         if key.startswith(prefix_with_separator):
             extracted_metrics[key[len(prefix_with_separator) :]] = value
     return extracted_metrics
+
+
+def _replace_metric_prefix(
+    metrics: dict[str, Any], source_prefix: str, target_prefix: str
+) -> dict[str, Any]:
+    remapped_metrics = {}
+    source_prefix_with_separator = f"{source_prefix}_"
+    target_prefix_with_separator = f"{target_prefix}_"
+    for key, value in metrics.items():
+        if key.startswith(source_prefix_with_separator):
+            remapped_metrics[
+                target_prefix_with_separator + key[len(source_prefix_with_separator) :]
+            ] = value
+        else:
+            remapped_metrics[key] = value
+    return remapped_metrics
 
 
 def _pop_wandb_callback(trainer):
@@ -207,7 +223,8 @@ def run_trainer_hpo(
     config: Config,
     run_hyperparameter_search_fn,
     cleanup_trainer_callbacks_fn,
-):
+    final_evaluation_fn=None,
+) -> None:
     try:
         if getattr(trainer, "model_init", None) is not None:
             try:
@@ -229,6 +246,22 @@ def run_trainer_hpo(
                 trainer.lr_scheduler = None
             if hasattr(trainer, "accelerator") and trainer.accelerator is not None:
                 trainer.accelerator.free_memory()
+
+        if callable(final_evaluation_fn):
+            compute_objective = build_hpo_compute_objective(config.training, config.hpo)
+
+            def _run_hpo_trial_final_evaluation(current_trainer):
+                metrics = final_evaluation_fn(current_trainer)
+                if metrics:
+                    current_trainer.objective = compute_objective(
+                        _replace_metric_prefix(
+                            metrics, source_prefix="final_eval", target_prefix="eval"
+                        )
+                    )
+                return metrics
+
+            _attach_final_evaluation_callback(trainer, _run_hpo_trial_final_evaluation)
+
         return run_hyperparameter_search_fn(trainer, config.training, config.hpo)
     finally:
         cleanup_trainer_callbacks_fn(trainer)

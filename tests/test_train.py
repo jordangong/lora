@@ -83,7 +83,7 @@ class TestTrainLlm:
         )
         config = Config(
             training=TrainingConfig(output_dir="./test-output", report_to="wandb"),
-            hpo=SimpleNamespace(enabled=True),
+            hpo=HPOConfig(enabled=True, metric_name="eval_loss"),
         )
         released = {}
 
@@ -114,6 +114,70 @@ class TestTrainLlm:
         assert trainer.optimizer is None
         assert trainer.lr_scheduler is None
         assert trainer.accelerator.free_memory_calls == 1
+
+    def test_run_trainer_hpo_runs_final_eval_for_each_trial_and_sets_objective(self, monkeypatch):
+        class FakeAccelerator:
+            def __init__(self):
+                self.free_memory_calls = 0
+
+            def free_memory(self):
+                self.free_memory_calls += 1
+
+        trainer = SimpleNamespace(
+            model_init=lambda _: nn.Linear(2, 2),
+            model="eager-model",
+            model_wrapped="wrapped-model",
+            optimizer="optimizer",
+            lr_scheduler="scheduler",
+            accelerator=FakeAccelerator(),
+            callback_handler=SimpleNamespace(callbacks=[]),
+            objective=None,
+        )
+        final_eval_calls = []
+
+        def add_callback(callback):
+            trainer.callback_handler.callbacks.append(callback)
+
+        trainer.add_callback = add_callback
+
+        config = Config(
+            training=TrainingConfig(output_dir="./test-output", report_to="wandb"),
+            hpo=HPOConfig(enabled=True, metric_name="eval_loss"),
+        )
+
+        def fake_run_hyperparameter_search(current_trainer, training_config, hpo_config):
+            for callback in list(current_trainer.callback_handler.callbacks):
+                on_train_begin = getattr(callback, "on_train_begin", None)
+                if callable(on_train_begin):
+                    on_train_begin(None, None, "control")
+            for callback in list(current_trainer.callback_handler.callbacks):
+                on_train_end = getattr(callback, "on_train_end", None)
+                if callable(on_train_end):
+                    on_train_end(None, None, "control")
+            return "best-run"
+
+        monkeypatch.setattr(
+            train_module, "run_hyperparameter_search", fake_run_hyperparameter_search
+        )
+        monkeypatch.setattr(train_module, "_cleanup_trainer_callbacks", lambda trainer: None)
+        monkeypatch.setattr(
+            train_module,
+            "_run_final_trainer_evaluation",
+            lambda current_trainer: (
+                final_eval_calls.append(current_trainer) or {"final_eval_loss": 0.25}
+            ),
+        )
+        monkeypatch.setitem(
+            __import__("sys").modules,
+            "accelerate.utils.memory",
+            SimpleNamespace(release_memory=lambda *objects: [None for _ in objects]),
+        )
+
+        result = train_module._run_trainer_hpo(trainer, config)
+
+        assert result == "best-run"
+        assert final_eval_calls == [trainer]
+        assert trainer.objective == pytest.approx(0.25)
 
     def test_run_trainer_training_runs_final_eval_before_callback_cleanup(self):
         events = []
