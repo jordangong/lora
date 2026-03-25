@@ -40,6 +40,10 @@ class TestRunLighteval:
         mock_pipeline.get_results.return_value = {
             "results": {"gsm8k_0": {"expr_gold_metric": 0.42}}
         }
+        original_cleanup = MagicMock()
+        mock_pipeline.model = SimpleNamespace(
+            model=MagicMock(), cleanup=original_cleanup, _tokenizer=object()
+        )
         components, mock_pipeline_cls = _mock_lighteval_components(mock_pipeline)
 
         model = MagicMock()
@@ -70,6 +74,7 @@ class TestRunLighteval:
 
         # Verify cleanup was monkey-patched to no-op
         mock_pipeline.model.cleanup()  # should not raise
+        original_cleanup.assert_called_once()
 
     def test_run_lighteval_extracts_metrics(self):
         """Test that run_lighteval correctly extracts metrics from results."""

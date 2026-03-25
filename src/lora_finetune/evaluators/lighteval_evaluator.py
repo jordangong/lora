@@ -286,7 +286,21 @@ def run_lighteval(
             configure_warning_loggers(["lighteval"], warning_handler, saved=saved_logging)
 
             # Prevent cleanup() from deleting the model (we still need it for training)
-            pipeline.model.cleanup = lambda: None
+            if callable(getattr(pipeline_model, "cleanup", None)):
+                pipeline_model_ref = pipeline_model
+                original_cleanup = pipeline_model.cleanup
+                shared_model = getattr(pipeline_model, "model", None)
+
+                def _cleanup_preserving_model():
+                    if not hasattr(pipeline_model_ref, "_tokenizer"):
+                        if shared_model is not None:
+                            pipeline_model_ref.model = shared_model
+                        return
+                    original_cleanup()
+                    if shared_model is not None:
+                        pipeline_model_ref.model = shared_model
+
+                pipeline_model_ref.cleanup = _cleanup_preserving_model
 
             # Replace lighteval's tqdm with our Rich bridge (or disable it)
             _orig_tqdm = transformers_model_module.tqdm
