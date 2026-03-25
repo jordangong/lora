@@ -577,6 +577,15 @@ class TrainingConfig:
     push_to_hub: bool = field(default=False, metadata={"help": "Push model to HuggingFace Hub"})
     hub_token: Optional[str] = field(default=None, metadata={"help": "HuggingFace Hub token"})
 
+    @property
+    def effective_batch_size(self) -> int:
+        return self.per_device_train_batch_size * self.gradient_accumulation_steps
+
+    def to_serializable_dict(self) -> Dict[str, Any]:
+        training_dict = dict(self.__dict__)
+        training_dict["effective_batch_size"] = self.effective_batch_size
+        return training_dict
+
     def __post_init__(self):
         if (
             self.gradient_checkpointing is not True
@@ -619,7 +628,9 @@ class Config:
         aug_config = AugmentationConfig(**aug_dict) if aug_dict else AugmentationConfig()
         data_config = DataConfig(**data_dict, augmentation=aug_config)
 
-        training_config = TrainingConfig(**config_dict.get("training", {}))
+        training_dict = dict(config_dict.get("training", {}))
+        training_dict.pop("effective_batch_size", None)
+        training_config = TrainingConfig(**training_dict)
         dpo_config = DPOConfig(**config_dict.get("dpo", {}))
         grpo_config = GRPOConfig(**config_dict.get("grpo", {}))
         hpo_config = HPOConfig(**config_dict.get("hpo", {}))
@@ -640,11 +651,12 @@ class Config:
         """Save configuration to YAML file."""
         data_dict = {k: v for k, v in self.data.__dict__.items() if k != "augmentation"}
         data_dict["augmentation"] = self.data.augmentation.__dict__
+        training_dict = self.training.to_serializable_dict()
         config_dict = {
             "model": self.model.__dict__,
             "lora": self.lora.__dict__,
             "data": data_dict,
-            "training": self.training.__dict__,
+            "training": training_dict,
             "dpo": self.dpo.__dict__,
             "grpo": self.grpo.__dict__,
             "hpo": self.hpo.__dict__,

@@ -296,7 +296,7 @@ def _build_wandb_config_payload(
     hpo_config: Optional[HPOConfig] = None,
     benchmark_eval_config: Optional[BenchmarkEvalConfig] = None,
 ) -> Dict[str, Any]:
-    config_payload: Dict[str, Any] = {"training": asdict(training_config)}
+    config_payload: Dict[str, Any] = {"training": training_config.to_serializable_dict()}
     if model_config is not None:
         config_payload["model"] = asdict(model_config)
     if data_config is not None:

@@ -872,6 +872,55 @@ class TestLoraTrainer:
                 trainer_module.Trainer, "_hp_search_setup", original_hp_search_setup
             )
 
+    def test_lora_trainer_hpo_sync_callback_sees_updated_effective_batch_size(self, monkeypatch):
+        from transformers import TrainingArguments
+
+        sync_payloads = []
+        original_hp_search_setup = trainer_module.Trainer._hp_search_setup
+
+        def fake_hp_search_setup(self, trial):
+            return None
+
+        monkeypatch.setattr(trainer_module.Trainer, "_hp_search_setup", fake_hp_search_setup)
+
+        try:
+            model = nn.Linear(10, 5)
+            args = TrainingArguments(
+                output_dir="./test-output",
+                num_train_epochs=1,
+                per_device_train_batch_size=1,
+                report_to="none",
+            )
+            training_config = TrainingConfig(
+                output_dir="./test-output",
+                report_to="wandb",
+                per_device_train_batch_size=2,
+                gradient_accumulation_steps=4,
+            )
+            trainer = LoraTrainer(
+                model=model,
+                args=args,
+                train_dataset=None,
+                hpo_config=HPOConfig(enabled=True, n_trials=2),
+                hpo_config_sections={"training": training_config, "lora": LoraConfig()},
+                hpo_sync_callback=lambda: sync_payloads.append(
+                    training_config.to_serializable_dict()
+                ),
+            )
+
+            trainer._hp_search_setup(
+                {"per_device_train_batch_size": 6, "gradient_accumulation_steps": 3}
+            )
+
+            assert training_config.per_device_train_batch_size == 6
+            assert training_config.gradient_accumulation_steps == 3
+            assert training_config.effective_batch_size == 18
+            assert sync_payloads[-1]["effective_batch_size"] == 18
+        finally:
+            monkeypatch.setattr(
+                trainer_module.Trainer, "_hp_search_setup", original_hp_search_setup
+            )
+
     def test_lora_trainer_save_model_method_exists(self):
         """Test that save_model method exists."""
         from transformers import TrainingArguments
@@ -1021,6 +1070,8 @@ class TestSetupWandb:
         training_config = TrainingConfig(
             report_to="wandb",
             output_dir="./outputs",
+            per_device_train_batch_size=3,
+            gradient_accumulation_steps=5,
             hub_token="super-secret",
         )
         model_config = ModelConfig(model_name_or_path="test-model")
@@ -1043,11 +1094,13 @@ class TestSetupWandb:
         assert "lora" in wandb_module.init_kwargs["config"]
         assert "benchmark_eval" in wandb_module.init_kwargs["config"]
         assert wandb_module.init_kwargs["config"]["training"]["hub_token"] == "***REDACTED***"
+        assert wandb_module.init_kwargs["config"]["training"]["effective_batch_size"] == 15
         assert wandb_module.init_kwargs["config"]["model"]["model_name_or_path"] == "test-model"
         assert wandb_module.init_kwargs["config"]["data"]["text_column"] == "prompt"
         assert wandb_module.init_kwargs["config"]["lora"]["method"] == "adalora"
         assert wandb_module.init_kwargs["config"]["benchmark_eval"]["tasks"] == "gsm8k,mmlu"
         assert wandb_module.config.updates[-1][0]["training"]["hub_token"] == "***REDACTED***"
+        assert wandb_module.config.updates[-1][0]["training"]["effective_batch_size"] == 15
 
     def test_setup_wandb_skips_eager_init_for_hpo(self, monkeypatch):
         wandb_module = ModuleType("wandb")

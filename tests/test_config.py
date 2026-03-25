@@ -286,6 +286,7 @@ class TestTrainingConfig:
         assert config.output_dir == "./outputs"
         assert config.num_train_epochs == 3
         assert config.per_device_train_batch_size == 4
+        assert config.effective_batch_size == 16
         assert config.learning_rate == 2e-4
         assert config.bf16 is True
         assert config.gradient_checkpointing is True
@@ -307,6 +308,7 @@ class TestTrainingConfig:
         assert config.learning_rate == 1e-4
         assert config.per_device_train_batch_size == 8
         assert config.gradient_accumulation_steps == 8
+        assert config.effective_batch_size == 64
 
     def test_accepts_unsloth_gradient_checkpointing_mode(self):
         """Test explicit Unsloth checkpointing mode is accepted."""
@@ -502,6 +504,8 @@ class TestConfig:
         config = Config()
         config.model.model_name_or_path = "saved-model"
         config.lora.r = 32
+        config.training.per_device_train_batch_size = 6
+        config.training.gradient_accumulation_steps = 3
         config.hpo.enabled = True
         config.hpo.n_trials = 6
 
@@ -517,8 +521,31 @@ class TestConfig:
 
             assert "saved-model" in content
             assert "r: 32" in content
+            assert "effective_batch_size: 18" in content
             assert "enabled: true" in content
             assert "n_trials: 6" in content
+        finally:
+            os.unlink(temp_path)
+
+    def test_from_yaml_ignores_persisted_effective_batch_size(self):
+        """Test loading config ignores serialized derived training fields."""
+        yaml_content = {
+            "training": {
+                "per_device_train_batch_size": 2,
+                "gradient_accumulation_steps": 8,
+                "effective_batch_size": 999,
+            }
+        }
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            yaml.dump(yaml_content, f)
+            temp_path = f.name
+
+        try:
+            config = Config.from_yaml(temp_path)
+            assert config.training.per_device_train_batch_size == 2
+            assert config.training.gradient_accumulation_steps == 8
+            assert config.training.effective_batch_size == 16
         finally:
             os.unlink(temp_path)
 

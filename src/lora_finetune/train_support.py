@@ -454,7 +454,12 @@ def build_configuration_panel(config: Config, get_method_display_name) -> Panel:
 
     # Training settings
     table.add_row("Epochs", str(config.training.num_train_epochs))
-    table.add_row("Batch size", str(config.training.per_device_train_batch_size))
+    table.add_row("Per-device batch size", str(config.training.per_device_train_batch_size))
+    table.add_row(
+        "Gradient accumulation",
+        str(config.training.gradient_accumulation_steps),
+    )
+    table.add_row("Effective batch size", str(config.training.effective_batch_size))
     table.add_row("Learning rate", str(config.training.learning_rate))
     table.add_row(
         "Gradient checkpointing",
