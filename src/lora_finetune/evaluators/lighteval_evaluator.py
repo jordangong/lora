@@ -175,6 +175,54 @@ def _restore_use_cache_state(model, state: Dict[str, Any]) -> None:
         generation_config.use_cache = state["generation_config_use_cache"]
 
 
+def _get_instance_callable(model, name: str):
+    model_dict = getattr(model, "__dict__", None)
+    if not isinstance(model_dict, dict):
+        return None
+    value = model_dict.get(name)
+    if callable(value):
+        return value
+    return None
+
+
+def _is_gradient_checkpointing_enabled(model) -> bool:
+    for attr_name in ("is_gradient_checkpointing", "gradient_checkpointing"):
+        try:
+            value = getattr(model, attr_name)
+        except Exception:
+            continue
+        if isinstance(value, bool):
+            return value
+
+    try:
+        for module in model.modules():
+            value = getattr(module, "gradient_checkpointing", None)
+            if isinstance(value, bool) and value:
+                return True
+    except Exception:
+        pass
+
+    return False
+
+
+def _restore_training_state(
+    model, was_training: bool, gradient_checkpointing_enabled: bool
+) -> None:
+    if was_training:
+        for_training = _get_instance_callable(model, "for_training")
+        if for_training is not None:
+            for_training(use_gradient_checkpointing=gradient_checkpointing_enabled)
+            return
+        model.train(True)
+        return
+
+    for_inference = _get_instance_callable(model, "for_inference")
+    if for_inference is not None:
+        for_inference()
+        return
+    model.train(False)
+
+
 def _release_gpu_memory() -> None:
     gc.collect()
     if torch.cuda.is_available():
@@ -385,6 +433,7 @@ class LightEvalCallback(TrainerCallback):
         # Save training state (lighteval sets model.eval() and disables gradients)
         was_training = model.training
         grad_enabled = torch.is_grad_enabled()
+        gradient_checkpointing_enabled = _is_gradient_checkpointing_enabled(model)
 
         try:
             metrics = run_lighteval(
@@ -398,9 +447,9 @@ class LightEvalCallback(TrainerCallback):
                 progress_label=f"Benchmark eval ({self.tasks})",
             )
         finally:
-            # Restore training state
-            model.train(was_training)
+            _restore_training_state(model, was_training, gradient_checkpointing_enabled)
             torch.set_grad_enabled(grad_enabled)
+            _release_gpu_memory()
 
         # Log metrics to wandb directly (trainer.log() adds unwanted "train/" prefix)
         prefixed_metrics = {f"benchmark/{k}": v for k, v in metrics.items()}

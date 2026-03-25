@@ -404,6 +404,36 @@ class TestLightEvalCallback:
         assert torch.is_grad_enabled()
 
     @patch("lora_finetune.evaluators.lighteval_evaluator.run_lighteval")
+    def test_on_step_end_restores_unsloth_training_state(self, mock_run):
+        """Test that Unsloth models are restored via for_training after eval."""
+        mock_run.return_value = {"gsm8k_0|expr_gold_metric": 0.42}
+
+        callback = LightEvalCallback(model_name="test-model", eval_steps=100)
+
+        args = MagicMock()
+        state = MagicMock()
+        state.global_step = 100
+        state.epoch = 1.0
+        control = MagicMock()
+
+        model = torch.nn.Linear(1, 1)
+        model.training = True
+        model.gradient_checkpointing = True
+        model.for_training = MagicMock()
+        model.train = MagicMock()
+
+        with patch(
+            "lora_finetune.evaluators.lighteval_evaluator._release_gpu_memory"
+        ) as mock_release:
+            torch.set_grad_enabled(True)
+            callback.on_step_end(args, state, control, model=model)
+
+        model.for_training.assert_called_once_with(use_gradient_checkpointing=True)
+        model.train.assert_not_called()
+        mock_release.assert_called_once()
+        assert torch.is_grad_enabled()
+
+    @patch("lora_finetune.evaluators.lighteval_evaluator.run_lighteval")
     def test_on_step_end_restores_state_on_error(self, mock_run):
         """Test that training state is restored even if eval fails."""
         mock_run.side_effect = RuntimeError("eval failed")
