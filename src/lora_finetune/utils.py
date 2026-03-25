@@ -281,6 +281,7 @@ class RichWarningHandler(logging.Handler):
         self._extra_rules = tuple(extra_rules)
         self._buffering = False
         self._buffer: list[str] = []
+        self._last_message: Optional[str] = None
 
     def emit(self, record):
         msg = format_warning_message(
@@ -290,11 +291,15 @@ class RichWarningHandler(logging.Handler):
         )
         if msg is None:
             return
-
         if self._buffering:
+            if msg in self._buffer:
+                return
             self._buffer.append(msg)
         else:
+            if msg == self._last_message:
+                return
             _print_warning_message(msg, self._console)
+            self._last_message = msg
 
     def start_buffering(self) -> None:
         self._buffering = True
@@ -306,6 +311,7 @@ class RichWarningHandler(logging.Handler):
         out = target_console or self._console
         for msg in msgs:
             _print_warning_message(msg, out)
+            self._last_message = msg
 
 
 def configure_warning_loggers(

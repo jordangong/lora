@@ -3,6 +3,7 @@
 import gc
 import logging
 import os
+import sys
 import tempfile
 from typing import Any, Dict, Optional
 
@@ -229,6 +230,301 @@ def _release_gpu_memory() -> None:
         torch.cuda.empty_cache()
 
 
+def _capture_generation_limit_state(model) -> Dict[str, Any]:
+    state = {
+        "generation_config_max_length": _MISSING,
+        "generation_config_max_new_tokens": _MISSING,
+    }
+    generation_config = getattr(model, "generation_config", None)
+    if generation_config is not None and hasattr(generation_config, "max_length"):
+        state["generation_config_max_length"] = generation_config.max_length
+    if generation_config is not None and hasattr(generation_config, "max_new_tokens"):
+        state["generation_config_max_new_tokens"] = generation_config.max_new_tokens
+    return state
+
+
+def _restore_generation_limit_state(model, state: Dict[str, Any]) -> None:
+    if state is None:
+        return
+
+    generation_config = getattr(model, "generation_config", None)
+    if generation_config is None:
+        return
+
+    if state.get("generation_config_max_length", _MISSING) is not _MISSING and hasattr(
+        generation_config, "max_length"
+    ):
+        generation_config.max_length = state["generation_config_max_length"]
+    if state.get("generation_config_max_new_tokens", _MISSING) is not _MISSING and hasattr(
+        generation_config, "max_new_tokens"
+    ):
+        generation_config.max_new_tokens = state["generation_config_max_new_tokens"]
+
+
+def _apply_generation_limit_override(model, max_new_tokens: int) -> None:
+    generation_config = getattr(model, "generation_config", None)
+    if generation_config is None:
+        return
+    if hasattr(generation_config, "max_length"):
+        generation_config.max_length = None
+    if hasattr(generation_config, "max_new_tokens"):
+        generation_config.max_new_tokens = max_new_tokens
+
+
+def _override_pipeline_generation_limits(pipeline, max_new_tokens: int) -> None:
+    pipeline_model = getattr(pipeline, "model", None)
+    generation_config_dict = getattr(pipeline_model, "generation_config_dict", None)
+    if isinstance(generation_config_dict, dict):
+        generation_config_dict["max_new_tokens"] = max_new_tokens
+        generation_config_dict.pop("max_length", None)
+
+    tasks_dict = getattr(pipeline, "tasks_dict", None)
+    if isinstance(tasks_dict, dict):
+        for task in tasks_dict.values():
+            if hasattr(task, "generation_size"):
+                task.generation_size = max_new_tokens
+
+    documents_dict = getattr(pipeline, "documents_dict", None)
+    if isinstance(documents_dict, dict):
+        for docs in documents_dict.values():
+            for doc in docs:
+                if hasattr(doc, "generation_size"):
+                    doc.generation_size = max_new_tokens
+
+
+def _patch_transformers_attention_mask_compat() -> None:
+    try:
+        import transformers.masking_utils as masking_utils
+        import transformers.modeling_attn_mask_utils as legacy_masking_utils
+        from transformers.utils.import_utils import is_tracing
+    except ImportError:
+        return
+
+    if getattr(legacy_masking_utils, "_lora_finetune_compat_installed", False):
+        return
+
+    def _cache_position(query_length: int, key_value_length: int, device) -> torch.Tensor:
+        return torch.arange(
+            key_value_length - query_length,
+            key_value_length,
+            device=device,
+            dtype=torch.long,
+        )
+
+    def _mask_function(is_causal: bool, sliding_window: Optional[int]):
+        if not is_causal:
+            return masking_utils.bidirectional_mask_function
+        if sliding_window is None:
+            return masking_utils.causal_mask_function
+        return masking_utils.sliding_window_causal_mask_function(sliding_window)
+
+    class AttentionMaskConverter:
+        def __init__(self, is_causal: bool, sliding_window: int | None = None):
+            self.is_causal = is_causal
+            self.sliding_window = sliding_window
+            if self.sliding_window is not None and self.sliding_window <= 0:
+                raise ValueError(
+                    "Make sure that when passing `sliding_window` that its value is a strictly positive integer, "
+                    f"not `{self.sliding_window}`"
+                )
+
+        def to_causal_4d(
+            self,
+            batch_size: int,
+            query_length: int,
+            key_value_length: int,
+            dtype: torch.dtype,
+            device: torch.device | str = "cpu",
+        ) -> torch.Tensor | None:
+            if not self.is_causal:
+                raise ValueError(
+                    f"Please use `to_causal_4d` only if {self.__class__} has `is_causal` set to True."
+                )
+            if query_length <= 1 and self.sliding_window is None:
+                return None
+            return masking_utils.eager_mask(
+                batch_size=batch_size,
+                cache_position=_cache_position(query_length, key_value_length, device),
+                kv_length=key_value_length,
+                mask_function=_mask_function(True, self.sliding_window),
+                dtype=dtype,
+                allow_is_bidirectional_skip=False,
+                use_vmap=False,
+            )
+
+        def to_4d(
+            self,
+            attention_mask_2d: torch.Tensor,
+            query_length: int,
+            dtype: torch.dtype,
+            key_value_length: int | None = None,
+        ) -> torch.Tensor:
+            if self.is_causal and key_value_length is None:
+                raise ValueError(
+                    "This attention mask converter is causal. Make sure to pass `key_value_length` to correctly "
+                    "create a causal mask."
+                )
+            if not self.is_causal and self.sliding_window is not None:
+                raise NotImplementedError(
+                    "Sliding window is currently only implemented for causal masking"
+                )
+            key_value_length = (
+                key_value_length if key_value_length is not None else attention_mask_2d.shape[-1]
+            )
+            return masking_utils.eager_mask(
+                batch_size=attention_mask_2d.shape[0],
+                cache_position=_cache_position(
+                    query_length, key_value_length, attention_mask_2d.device
+                ),
+                kv_length=key_value_length,
+                mask_function=_mask_function(self.is_causal, self.sliding_window),
+                attention_mask=attention_mask_2d,
+                dtype=dtype,
+                allow_is_bidirectional_skip=False,
+                use_vmap=False,
+            )
+
+        @staticmethod
+        def _make_causal_mask(
+            input_ids_shape: torch.Size,
+            dtype: torch.dtype,
+            device: torch.device,
+            past_key_values_length: int = 0,
+            sliding_window: int | None = None,
+        ):
+            batch_size, query_length = input_ids_shape
+            key_value_length = query_length + past_key_values_length
+            if query_length <= 1 and sliding_window is None:
+                return None
+            return masking_utils.eager_mask(
+                batch_size=batch_size,
+                cache_position=_cache_position(query_length, key_value_length, device),
+                kv_length=key_value_length,
+                mask_function=_mask_function(True, sliding_window),
+                dtype=dtype,
+                allow_is_bidirectional_skip=False,
+                use_vmap=False,
+            )
+
+        @staticmethod
+        def _expand_mask(mask: torch.Tensor, dtype: torch.dtype, tgt_len: int | None = None):
+            tgt_len = tgt_len if tgt_len is not None else mask.shape[-1]
+            return masking_utils.eager_mask(
+                batch_size=mask.shape[0],
+                cache_position=torch.arange(tgt_len, device=mask.device, dtype=torch.long),
+                kv_length=mask.shape[-1],
+                mask_function=masking_utils.bidirectional_mask_function,
+                attention_mask=mask,
+                dtype=dtype,
+                allow_is_bidirectional_skip=False,
+                use_vmap=False,
+            )
+
+        @staticmethod
+        def _unmask_unattended(expanded_mask: torch.FloatTensor, min_dtype: float):
+            if expanded_mask.dtype == torch.bool:
+                raise ValueError(
+                    "AttentionMaskConverter._unmask_unattended expects a float `expanded_mask`, got a BoolTensor."
+                )
+            return expanded_mask.mul(~torch.all(expanded_mask == min_dtype, dim=-1, keepdim=True))
+
+        @staticmethod
+        def _ignore_causal_mask_sdpa(
+            attention_mask: torch.Tensor | None,
+            inputs_embeds: torch.Tensor,
+            past_key_values_length: int,
+            sliding_window: int | None = None,
+            is_training: bool = False,
+        ) -> bool:
+            del is_training
+            if attention_mask is not None and attention_mask.dim() == 4:
+                return False
+            query_length = inputs_embeds.shape[1]
+            key_value_length = query_length + past_key_values_length
+            return masking_utils._ignore_causal_mask_sdpa(
+                attention_mask,
+                query_length,
+                key_value_length,
+                past_key_values_length,
+                sliding_window,
+            )
+
+    def _prepare_4d_causal_attention_mask_for_sdpa(
+        attention_mask: torch.Tensor | None,
+        input_shape: torch.Size | tuple | list,
+        inputs_embeds: torch.Tensor,
+        past_key_values_length: int,
+        sliding_window: int | None = None,
+    ):
+        attn_mask_converter = AttentionMaskConverter(is_causal=True, sliding_window=sliding_window)
+        key_value_length = input_shape[-1] + past_key_values_length
+        is_tracing_ = is_tracing(inputs_embeds)
+        ignore_causal_mask = AttentionMaskConverter._ignore_causal_mask_sdpa(
+            attention_mask=attention_mask,
+            inputs_embeds=inputs_embeds,
+            past_key_values_length=past_key_values_length,
+            sliding_window=sliding_window,
+        )
+        if ignore_causal_mask:
+            expanded_4d_mask = None
+        elif attention_mask is None:
+            expanded_4d_mask = attn_mask_converter.to_causal_4d(
+                input_shape[0],
+                input_shape[-1],
+                key_value_length,
+                dtype=inputs_embeds.dtype,
+                device=inputs_embeds.device,
+            )
+        else:
+            if attention_mask.dim() == 4:
+                expanded_4d_mask = attention_mask
+            else:
+                expanded_4d_mask = attn_mask_converter.to_4d(
+                    attention_mask,
+                    input_shape[-1],
+                    dtype=inputs_embeds.dtype,
+                    key_value_length=key_value_length,
+                )
+            if not is_tracing_ and expanded_4d_mask.device.type in ["cuda", "xpu"]:
+                expanded_4d_mask = AttentionMaskConverter._unmask_unattended(
+                    expanded_4d_mask,
+                    min_dtype=torch.finfo(inputs_embeds.dtype).min,
+                )
+        return expanded_4d_mask
+
+    def _prepare_4d_attention_mask_for_sdpa(
+        mask: torch.Tensor,
+        dtype: torch.dtype,
+        tgt_len: int | None = None,
+    ):
+        if not is_tracing(mask) and torch.all(mask == 1):
+            return None
+        return AttentionMaskConverter._expand_mask(mask=mask, dtype=dtype, tgt_len=tgt_len)
+
+    legacy_masking_utils.AttentionMaskConverter = AttentionMaskConverter
+    legacy_masking_utils._prepare_4d_causal_attention_mask_for_sdpa = (
+        _prepare_4d_causal_attention_mask_for_sdpa
+    )
+    legacy_masking_utils._prepare_4d_attention_mask_for_sdpa = _prepare_4d_attention_mask_for_sdpa
+    legacy_masking_utils._lora_finetune_compat_installed = True
+
+    for module_name, module in list(sys.modules.items()):
+        if not module_name.startswith("unsloth.models"):
+            continue
+        if hasattr(module, "AttentionMaskConverter"):
+            setattr(module, "AttentionMaskConverter", AttentionMaskConverter)
+        if hasattr(module, "_prepare_4d_causal_attention_mask_for_sdpa"):
+            setattr(
+                module,
+                "_prepare_4d_causal_attention_mask_for_sdpa",
+                _prepare_4d_causal_attention_mask_for_sdpa,
+            )
+        if hasattr(module, "_prepare_4d_attention_mask_for_sdpa"):
+            setattr(
+                module, "_prepare_4d_attention_mask_for_sdpa", _prepare_4d_attention_mask_for_sdpa
+            )
+
+
 def run_lighteval(
     model: PreTrainedModel,
     model_name: str,
@@ -264,8 +560,11 @@ def run_lighteval(
     pipeline_parameters_cls = components["PipelineParameters"]
     transformers_model_module = components["transformers_model_module"]
     model_use_cache_state = _capture_use_cache_state(model)
+    model_generation_limit_state = _capture_generation_limit_state(model)
 
+    _patch_transformers_attention_mask_compat()
     _normalize_unsloth_layer_device_indices(model)
+    _apply_generation_limit_override(model, max_new_tokens)
 
     pipeline_params = pipeline_parameters_cls(
         launcher_type=parallelism_manager.NONE,
@@ -312,6 +611,7 @@ def run_lighteval(
         pipeline_model = None
         pipeline_root_model = None
         pipeline_root_model_use_cache_state = None
+        pipeline_root_model_generation_limit_state = None
 
         try:
             pipeline = pipeline_cls(
@@ -329,6 +629,12 @@ def run_lighteval(
                     pipeline_root_model_use_cache_state = _capture_use_cache_state(
                         pipeline_root_model
                     )
+                    pipeline_root_model_generation_limit_state = _capture_generation_limit_state(
+                        pipeline_root_model
+                    )
+                _apply_generation_limit_override(pipeline_root_model, max_new_tokens)
+
+            _override_pipeline_generation_limits(pipeline, max_new_tokens)
 
             # Capture any loggers created during Pipeline init
             configure_warning_loggers(["lighteval"], warning_handler, saved=saved_logging)
@@ -373,7 +679,11 @@ def run_lighteval(
                 transformers_model_module.tqdm = _orig_tqdm
             if pipeline_root_model is not None and pipeline_root_model is not model:
                 _restore_use_cache_state(pipeline_root_model, pipeline_root_model_use_cache_state)
+                _restore_generation_limit_state(
+                    pipeline_root_model, pipeline_root_model_generation_limit_state
+                )
             _restore_use_cache_state(model, model_use_cache_state)
+            _restore_generation_limit_state(model, model_generation_limit_state)
             pipeline_model = None
             pipeline_root_model = None
             pipeline = None

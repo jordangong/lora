@@ -251,6 +251,58 @@ class TestRunLighteval:
         assert wrapped_model.generation_config.use_cache is False
         assert release_calls == ["released"]
 
+    def test_run_lighteval_overrides_generation_limits_and_restores_state(self):
+        input_model = torch.nn.Linear(1, 1)
+        input_model.config = SimpleNamespace(use_cache=False)
+        input_model.generation_config = SimpleNamespace(max_length=8192, max_new_tokens=256)
+
+        wrapped_model = torch.nn.Linear(1, 1)
+        wrapped_model.config = SimpleNamespace(use_cache=False)
+        wrapped_model.generation_config = SimpleNamespace(max_length=8192, max_new_tokens=256)
+
+        task = SimpleNamespace(generation_size=256)
+        doc = SimpleNamespace(generation_size=256)
+        mock_pipeline = MagicMock()
+        mock_pipeline.model = SimpleNamespace(
+            model=wrapped_model,
+            cleanup=lambda: None,
+            generation_config_dict={"max_length": 8192, "max_new_tokens": 256},
+        )
+        mock_pipeline.tasks_dict = {"gsm8k": task}
+        mock_pipeline.documents_dict = {"gsm8k": [doc]}
+        mock_pipeline.get_results.return_value = {
+            "results": {"gsm8k_0": {"expr_gold_metric": 0.42}}
+        }
+
+        def assert_generation_state_during_eval():
+            assert input_model.generation_config.max_length is None
+            assert input_model.generation_config.max_new_tokens == 512
+            assert wrapped_model.generation_config.max_length is None
+            assert wrapped_model.generation_config.max_new_tokens == 512
+            assert mock_pipeline.model.generation_config_dict == {"max_new_tokens": 512}
+            assert task.generation_size == 512
+            assert doc.generation_size == 512
+
+        mock_pipeline.evaluate.side_effect = assert_generation_state_during_eval
+        components, _ = _mock_lighteval_components(mock_pipeline)
+
+        with patch(
+            "lora_finetune.evaluators.lighteval_evaluator._import_lighteval_components",
+            return_value=components,
+        ):
+            metrics = run_lighteval(
+                model=input_model,
+                model_name="test-model",
+                tasks="gsm8k",
+                max_new_tokens=512,
+            )
+
+        assert metrics == {"gsm8k_0|expr_gold_metric": 0.42}
+        assert input_model.generation_config.max_length == 8192
+        assert input_model.generation_config.max_new_tokens == 256
+        assert wrapped_model.generation_config.max_length == 8192
+        assert wrapped_model.generation_config.max_new_tokens == 256
+
 
 class TestLightEvalLoggingHelpers:
     """Tests for lighteval logging setup/restore helpers."""

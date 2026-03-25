@@ -438,6 +438,24 @@ class TestRichWarningHandlerBuffering:
 
         assert len(cap.messages) == 1
 
+    def test_non_buffered_deduplicates_consecutive_messages(self):
+        handler, cap = self._make_handler_and_console()
+        record = self._make_record("duplicate warning")
+
+        handler.emit(record)
+        handler.emit(record)
+
+        assert len(cap.messages) == 1
+
+    def test_buffering_deduplicates_matching_messages(self):
+        handler, cap = self._make_handler_and_console()
+        handler.start_buffering()
+        handler.emit(self._make_record("duplicate warning"))
+        handler.emit(self._make_record("duplicate warning"))
+        handler.flush_buffered()
+
+        assert len(cap.messages) == 1
+
 
 class TestWandbRichTerminalLogging:
     def _make_term_module(self):
