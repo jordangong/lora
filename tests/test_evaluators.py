@@ -198,6 +198,54 @@ class TestRunLighteval:
         assert input_model.layer._per_layer_device_index == "cpu"
         assert wrapped_model.layer._per_layer_device_index == "cpu"
 
+    def test_run_lighteval_restores_use_cache_state_and_releases_memory(self):
+        input_model = torch.nn.Linear(1, 1)
+        input_model.config = SimpleNamespace(use_cache=False)
+        input_model.generation_config = SimpleNamespace(use_cache=False)
+
+        wrapped_model = torch.nn.Linear(1, 1)
+        wrapped_model.config = SimpleNamespace(use_cache=False)
+        wrapped_model.generation_config = SimpleNamespace(use_cache=False)
+
+        mock_pipeline = MagicMock()
+        mock_pipeline.model = SimpleNamespace(model=wrapped_model, cleanup=lambda: None)
+        mock_pipeline.get_results.return_value = {
+            "results": {"gsm8k_0": {"expr_gold_metric": 0.42}}
+        }
+
+        def mutate_cache_state():
+            input_model.config.use_cache = True
+            input_model.generation_config.use_cache = True
+            wrapped_model.config.use_cache = True
+            wrapped_model.generation_config.use_cache = True
+
+        mock_pipeline.evaluate.side_effect = mutate_cache_state
+        components, _ = _mock_lighteval_components(mock_pipeline)
+        release_calls = []
+
+        with (
+            patch(
+                "lora_finetune.evaluators.lighteval_evaluator._import_lighteval_components",
+                return_value=components,
+            ),
+            patch(
+                "lora_finetune.evaluators.lighteval_evaluator._release_gpu_memory",
+                side_effect=lambda: release_calls.append("released"),
+            ),
+        ):
+            metrics = run_lighteval(
+                model=input_model,
+                model_name="test-model",
+                tasks="gsm8k",
+            )
+
+        assert metrics == {"gsm8k_0|expr_gold_metric": 0.42}
+        assert input_model.config.use_cache is False
+        assert input_model.generation_config.use_cache is False
+        assert wrapped_model.config.use_cache is False
+        assert wrapped_model.generation_config.use_cache is False
+        assert release_calls == ["released"]
+
 
 class TestLightEvalLoggingHelpers:
     """Tests for lighteval logging setup/restore helpers."""

@@ -1,5 +1,6 @@
 """Benchmark evaluation using HuggingFace lighteval."""
 
+import gc
 import logging
 import os
 import tempfile
@@ -19,6 +20,8 @@ from ..utils import (
 )
 
 logger = logging.getLogger(__name__)
+
+_MISSING = object()
 
 
 LIGHTEVAL_WARNING_RULES = (
@@ -142,6 +145,42 @@ def _normalize_unsloth_layer_device_indices(model) -> None:
         setattr(module, "_per_layer_device_index", module_device or fallback_device)
 
 
+def _capture_use_cache_state(model) -> Dict[str, Any]:
+    state = {
+        "config_use_cache": _MISSING,
+        "generation_config_use_cache": _MISSING,
+    }
+    config = getattr(model, "config", None)
+    if config is not None and hasattr(config, "use_cache"):
+        state["config_use_cache"] = config.use_cache
+    generation_config = getattr(model, "generation_config", None)
+    if generation_config is not None and hasattr(generation_config, "use_cache"):
+        state["generation_config_use_cache"] = generation_config.use_cache
+    return state
+
+
+def _restore_use_cache_state(model, state: Dict[str, Any]) -> None:
+    if state is None:
+        return
+
+    config = getattr(model, "config", None)
+    if config is not None and state.get("config_use_cache", _MISSING) is not _MISSING:
+        config.use_cache = state["config_use_cache"]
+
+    generation_config = getattr(model, "generation_config", None)
+    if (
+        generation_config is not None
+        and state.get("generation_config_use_cache", _MISSING) is not _MISSING
+    ):
+        generation_config.use_cache = state["generation_config_use_cache"]
+
+
+def _release_gpu_memory() -> None:
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+
 def run_lighteval(
     model: PreTrainedModel,
     model_name: str,
@@ -176,6 +215,7 @@ def run_lighteval(
     pipeline_cls = components["Pipeline"]
     pipeline_parameters_cls = components["PipelineParameters"]
     transformers_model_module = components["transformers_model_module"]
+    model_use_cache_state = _capture_use_cache_state(model)
 
     _normalize_unsloth_layer_device_indices(model)
 
@@ -219,7 +259,11 @@ def run_lighteval(
         warning_handler = RichWarningHandler(warn_console, extra_rules=LIGHTEVAL_WARNING_RULES)
         saved_logging = configure_warning_loggers(["lighteval"], warning_handler)
         _orig_tqdm = None
-        results = None
+        metrics = {}
+        pipeline = None
+        pipeline_model = None
+        pipeline_root_model = None
+        pipeline_root_model_use_cache_state = None
 
         try:
             pipeline = pipeline_cls(
@@ -230,8 +274,13 @@ def run_lighteval(
                 model=model,
             )
             pipeline_model = getattr(pipeline, "model", None)
-            if pipeline_model is not None and hasattr(pipeline_model, "model"):
-                _normalize_unsloth_layer_device_indices(pipeline_model.model)
+            pipeline_root_model = getattr(pipeline_model, "model", None)
+            if pipeline_root_model is not None:
+                _normalize_unsloth_layer_device_indices(pipeline_root_model)
+                if pipeline_root_model is not model:
+                    pipeline_root_model_use_cache_state = _capture_use_cache_state(
+                        pipeline_root_model
+                    )
 
             # Capture any loggers created during Pipeline init
             configure_warning_loggers(["lighteval"], warning_handler, saved=saved_logging)
@@ -251,24 +300,24 @@ def run_lighteval(
                 )
 
             pipeline.evaluate()
-
-            results = pipeline.get_results()
+            raw_results = pipeline.get_results() or {}
+            for task_name, task_metrics in raw_results.get("results", {}).items():
+                for metric_name, value in task_metrics.items():
+                    if isinstance(value, (int, float)):
+                        metrics[f"{task_name}|{metric_name}"] = value
         finally:
             restore_logger_configuration(saved_logging)
             if _orig_tqdm is not None:
                 transformers_model_module.tqdm = _orig_tqdm
-
-    if results is None:
-        return {}
-
-    # Extract the metrics from the results dict
-    # Format: {"results": {"task_name": {"metric_name": value, ...}}, ...}
-    metrics = {}
-    raw_results = results.get("results", {})
-    for task_name, task_metrics in raw_results.items():
-        for metric_name, value in task_metrics.items():
-            if isinstance(value, (int, float)):
-                metrics[f"{task_name}|{metric_name}"] = value
+            if pipeline_root_model is not None and pipeline_root_model is not model:
+                _restore_use_cache_state(pipeline_root_model, pipeline_root_model_use_cache_state)
+            _restore_use_cache_state(model, model_use_cache_state)
+            pipeline_model = None
+            pipeline_root_model = None
+            pipeline = None
+            evaluation_tracker = None
+            warning_handler = None
+            _release_gpu_memory()
 
     return metrics
 
