@@ -128,6 +128,7 @@ def train_llm(config: Config, deps, logger) -> None:
     )
 
     if config.hpo.enabled:
+        model = None
         if deps._run_hpo_if_enabled(trainer, config):
             return
 
@@ -321,6 +322,7 @@ def train_text_classification(config: Config, deps) -> None:
     )
 
     if config.hpo.enabled:
+        model = None
         if deps._run_hpo_if_enabled(trainer, config):
             return
 

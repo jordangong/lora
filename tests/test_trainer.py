@@ -2,7 +2,7 @@
 
 import os
 import sys
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 
 import numpy as np
 import pytest
@@ -833,6 +833,68 @@ class TestLoraTrainer:
             monkeypatch.setattr(
                 trainer_module.Trainer, "_hp_search_setup", original_hp_search_setup
             )
+
+    def test_lora_trainer_hpo_releases_previous_trial_state_before_rebuild(self, monkeypatch):
+        from transformers import TrainingArguments
+
+        rebuilt_models = []
+        original_call_model_init = trainer_module.Trainer.call_model_init
+
+        def fake_call_model_init(self, trial=None):
+            rebuilt_models.append(trial)
+            return "rebuilt-model"
+
+        monkeypatch.setattr(trainer_module.Trainer, "call_model_init", fake_call_model_init)
+
+        released = []
+
+        def fake_release_trainer_memory_state(trainer):
+            released.append(
+                (trainer.model_wrapped, trainer.model, trainer.optimizer, trainer.lr_scheduler)
+            )
+            trainer.model_wrapped = None
+            trainer.model = None
+            trainer.optimizer = None
+            trainer.lr_scheduler = None
+
+        monkeypatch.setattr(
+            trainer_module,
+            "_release_trainer_memory_state",
+            fake_release_trainer_memory_state,
+        )
+
+        try:
+            model = nn.Linear(10, 5)
+            args = TrainingArguments(
+                output_dir="./test-output",
+                num_train_epochs=1,
+                per_device_train_batch_size=1,
+                report_to="none",
+            )
+            training_config = TrainingConfig(output_dir="./test-output", report_to="wandb")
+            trainer = LoraTrainer(
+                model=model,
+                args=args,
+                train_dataset=None,
+                hpo_config=HPOConfig(enabled=True, n_trials=2),
+                hpo_config_sections={"training": training_config, "lora": LoraConfig()},
+            )
+            trainer.model_wrapped = "wrapped-model"
+            trainer.optimizer = "optimizer"
+            trainer.lr_scheduler = "scheduler"
+            trainer.accelerator = SimpleNamespace(free_memory=lambda: None)
+
+            result = trainer.call_model_init({"learning_rate": 1e-5})
+
+            assert released == [("wrapped-model", model, "optimizer", "scheduler")]
+            assert result == "rebuilt-model"
+            assert trainer.model is None
+            assert trainer.model_wrapped is None
+            assert trainer.optimizer is None
+            assert trainer.lr_scheduler is None
+            assert rebuilt_models == [{"learning_rate": 1e-5}]
+        finally:
+            monkeypatch.setattr(trainer_module.Trainer, "call_model_init", original_call_model_init)
 
     def test_lora_trainer_hpo_ignores_wandb_metadata_keys(self, monkeypatch):
         from transformers import TrainingArguments

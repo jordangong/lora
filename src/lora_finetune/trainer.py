@@ -1,6 +1,7 @@
 """Custom trainer with performance optimizations."""
 
 import copy
+import gc
 import inspect
 import logging
 import os
@@ -8,6 +9,7 @@ import re
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Union
 
+import torch
 from peft import PeftModel
 from transformers import (
     DataCollator,
@@ -97,6 +99,91 @@ def _raise_missing_trl_dependency(
     if import_error is None:
         raise ImportError(message)
     raise ImportError(f"{message}. Original import error: {import_error}") from import_error
+
+
+def _format_cuda_memory_state() -> str:
+    if not torch.cuda.is_available():
+        return "cuda_unavailable"
+
+    allocated = torch.cuda.memory_allocated() / 1024**3
+    reserved = torch.cuda.memory_reserved() / 1024**3
+    total = torch.cuda.get_device_properties(torch.cuda.current_device()).total_memory / 1024**3
+    free = total - reserved
+    return (
+        f"allocated={allocated:.2f}GB reserved={reserved:.2f}GB "
+        f"free={free:.2f}GB total={total:.2f}GB"
+    )
+
+
+def _move_module_to_cpu(module) -> None:
+    if module is None or not hasattr(module, "to"):
+        return
+    try:
+        module.to("cpu")
+    except Exception:
+        return
+
+
+def _clear_optimizer_state(optimizer) -> None:
+    if optimizer is None or not hasattr(optimizer, "state"):
+        return
+    state = getattr(optimizer, "state", None)
+    if not isinstance(state, dict):
+        return
+    for value in state.values():
+        if not isinstance(value, dict):
+            continue
+        for key, tensor in list(value.items()):
+            if torch.is_tensor(tensor):
+                value[key] = tensor.detach().cpu()
+    state.clear()
+
+
+def _release_trainer_memory_state(trainer) -> None:
+    accelerator = getattr(trainer, "accelerator", None)
+    model_wrapped = getattr(trainer, "model_wrapped", None)
+    model = getattr(trainer, "model", None)
+    optimizer = getattr(trainer, "optimizer", None)
+    lr_scheduler = getattr(trainer, "lr_scheduler", None)
+
+    logger.info("HPO CUDA memory before release: %s", _format_cuda_memory_state())
+
+    _move_module_to_cpu(model_wrapped)
+    if model is not model_wrapped:
+        _move_module_to_cpu(model)
+    _clear_optimizer_state(optimizer)
+
+    try:
+        from accelerate.utils.memory import release_memory
+
+        if accelerator is not None:
+            model_wrapped, model, optimizer, lr_scheduler = accelerator.free_memory(
+                model_wrapped,
+                model,
+                optimizer,
+                lr_scheduler,
+            )
+        trainer.model_wrapped, trainer.model, trainer.optimizer, trainer.lr_scheduler = (
+            release_memory(
+                model_wrapped,
+                model,
+                optimizer,
+                lr_scheduler,
+            )
+        )
+    except ImportError:
+        trainer.model_wrapped = None
+        trainer.model = None
+        trainer.optimizer = None
+        trainer.lr_scheduler = None
+
+    if accelerator is not None:
+        accelerator.free_memory()
+
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    logger.info("HPO CUDA memory after release: %s", _format_cuda_memory_state())
 
 
 def _get_training_arguments_kwargs(
@@ -396,6 +483,22 @@ class LoraTrainerMixin:
         apply_hpo_parameters_to_config_sections(self._hpo_config_sections, params)
         if callable(self._hpo_sync_callback):
             self._hpo_sync_callback()
+
+    def call_model_init(self, trial=None):
+        if self.hpo_config is not None and self.hpo_config.enabled:
+            logger.info(
+                "HPO trial rebuild requested with CUDA memory: %s", _format_cuda_memory_state()
+            )
+            if (
+                getattr(self, "model", None) is not None
+                or getattr(self, "model_wrapped", None) is not None
+                or getattr(self, "optimizer", None) is not None
+                or getattr(self, "lr_scheduler", None) is not None
+            ):
+                _release_trainer_memory_state(self)
+        rebuilt_model = super().call_model_init(trial)
+        logger.info("HPO trial rebuild finished with CUDA memory: %s", _format_cuda_memory_state())
+        return rebuilt_model
 
     def _get_hpo_trial_output_dir(self) -> Optional[str]:
         base_output_dir = self._hpo_base_output_dir or getattr(self.args, "output_dir", None)
