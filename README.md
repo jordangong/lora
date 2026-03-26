@@ -565,6 +565,45 @@ uv run pytest tests/test_config.py::test_function_name
 uv run pytest --cov=lora_finetune
 ```
 
+Opt-in integration coverage for the shipped config paths lives in
+[`tests/test_config_integration.py`](tests/test_config_integration.py). These tests:
+
+- require CUDA
+- are skipped by default
+- use tiny public checkpoints by default to keep VRAM usage low on a 3090-class GPU
+- replace external datasets with tiny local fixtures while still running the real training flows
+
+Run them individually with:
+
+```bash
+LORA_RUN_ROBERTA_INTEGRATION=1 uv run pytest tests/test_config_integration.py -k roberta -vv -s
+LORA_RUN_VIT_INTEGRATION=1 uv run pytest tests/test_config_integration.py -k vit -vv -s
+LORA_RUN_LLAMA3_INTEGRATION=1 uv run pytest tests/test_config_integration.py -k llama3 -vv -s
+```
+
+Run all config integration tests together with:
+
+```bash
+LORA_RUN_ROBERTA_INTEGRATION=1 \
+LORA_RUN_VIT_INTEGRATION=1 \
+LORA_RUN_LLAMA3_INTEGRATION=1 \
+uv run pytest tests/test_config_integration.py -vv -s
+```
+
+Default tiny checkpoints:
+
+- RoBERTa: `hf-internal-testing/tiny-random-roberta`
+- ViT: `hf-internal-testing/tiny-random-ViTForImageClassification`
+- Llama-compatible SFT: `hf-internal-testing/tiny-random-LlamaForCausalLM`
+
+You can override them if you want to validate a different checkpoint:
+
+```bash
+LORA_RUN_ROBERTA_INTEGRATION=1 \
+LORA_ROBERTA_MODEL_NAME_OR_PATH=roberta-base \
+uv run pytest tests/test_config_integration.py -k roberta -vv -s
+```
+
 ## Project structure
 
 ```text
