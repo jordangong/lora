@@ -3,17 +3,21 @@
 import json
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import torch
+import yaml
 from PIL import Image
 
+import lora_finetune.train as train_module
 from lora_finetune.config import Config
 from lora_finetune.train import train_llm, train_text_classification, train_vision
 
 _RUN_ROBERTA_INTEGRATION = os.getenv("LORA_RUN_ROBERTA_INTEGRATION") == "1"
 _RUN_VIT_INTEGRATION = os.getenv("LORA_RUN_VIT_INTEGRATION") == "1"
 _RUN_LLAMA3_INTEGRATION = os.getenv("LORA_RUN_LLAMA3_INTEGRATION") == "1"
+_RUN_LLAMA3_HPO_INTEGRATION = os.getenv("LORA_RUN_LLAMA3_HPO_INTEGRATION") == "1"
 
 _DEFAULT_ROBERTA_MODEL_NAME_OR_PATH = "hf-internal-testing/tiny-random-roberta"
 _DEFAULT_VIT_MODEL_NAME_OR_PATH = "hf-internal-testing/tiny-random-ViTForImageClassification"
@@ -23,6 +27,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 _ROBERTA_CONFIG_PATH = _REPO_ROOT / "configs" / "roberta_text_classification_lora.yaml"
 _VIT_CONFIG_PATH = _REPO_ROOT / "configs" / "vit_lora.yaml"
 _LLAMA3_CONFIG_PATH = _REPO_ROOT / "configs" / "llama3_lora.yaml"
+_LLAMA3_HPO_CONFIG_PATH = _REPO_ROOT / "configs" / "llama3_lora_hpo.yaml"
 
 
 def _write_jsonl(path: Path, rows: list[dict[str, object]]) -> None:
@@ -246,4 +251,103 @@ def test_llama3_sft_config_trains_end_to_end(tmp_path, monkeypatch):
     _assert_saved_files(
         config.training.output_dir,
         ["adapter_config.json", "adapter_model.safetensors", "tokenizer_config.json"],
+    )
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
+def test_llama3_hpo_config_runs_single_trial_end_to_end(tmp_path, monkeypatch):
+    """Run the shipped Llama3 HPO config through a single local trial."""
+    if not _RUN_LLAMA3_HPO_INTEGRATION:
+        pytest.skip("Set LORA_RUN_LLAMA3_HPO_INTEGRATION=1 to run the Llama3 HPO integration test.")
+
+    train_rows = [
+        {"prompt": "Translate to French: cat", "completion": " chat"},
+        {"prompt": "Translate to French: dog", "completion": " chien"},
+        {"prompt": "Translate to French: house", "completion": " maison"},
+        {"prompt": "Translate to French: red", "completion": " rouge"},
+        {"prompt": "Translate to French: blue", "completion": " bleu"},
+        {"prompt": "Translate to French: green", "completion": " vert"},
+    ]
+    eval_rows = [
+        {"prompt": "Translate to French: bird", "completion": " oiseau"},
+        {"prompt": "Translate to French: black", "completion": " noir"},
+    ]
+
+    train_file = tmp_path / "llama3_hpo_train.jsonl"
+    validation_file = tmp_path / "llama3_hpo_validation.jsonl"
+    _write_jsonl(train_file, train_rows)
+    _write_jsonl(validation_file, eval_rows)
+
+    trial_params = {"learning_rate": 1.0e-5, "gradient_accumulation_steps": 2}
+    trial_dirs: list[str] = []
+
+    def fake_run_hyperparameter_search(current_trainer, training_config, hpo_config):
+        current_trainer.train(trial=trial_params)
+        trial_dirs.append(current_trainer.args.output_dir)
+        return SimpleNamespace(
+            run_id="trial-001",
+            objective=current_trainer.objective,
+            hyperparameters={"training": dict(trial_params)},
+            run_summary="integration-sweep",
+        )
+
+    config = Config.from_yaml(str(_LLAMA3_HPO_CONFIG_PATH))
+    config.model.model_name_or_path = os.getenv(
+        "LORA_LLAMA3_HPO_MODEL_NAME_OR_PATH",
+        _DEFAULT_LLAMA3_MODEL_NAME_OR_PATH,
+    )
+    config.model.use_flash_attention_2 = False
+    config.model.torch_dtype = "float16"
+    config.data.dataset_name = None
+    config.data.dataset_config_name = None
+    config.data.train_file = str(train_file)
+    config.data.validation_file = str(validation_file)
+    config.data.eval_split_ratio = None
+    config.data.preprocessing_num_workers = 1
+    config.data.max_seq_length = 128
+    config.data.max_train_samples = len(train_rows)
+    config.data.max_eval_samples = len(eval_rows)
+    config.training.output_dir = str(tmp_path / "outputs")
+    config.training.num_train_epochs = 1
+    config.training.per_device_train_batch_size = 1
+    config.training.per_device_eval_batch_size = 1
+    config.training.gradient_accumulation_steps = 1
+    config.training.eval_strategy = "epoch"
+    config.training.save_strategy = "no"
+    config.training.load_best_model_at_end = False
+    config.training.logging_steps = 1
+    config.training.optim = "adamw_torch"
+    config.training.fp16 = True
+    config.training.bf16 = False
+    config.training.dataloader_num_workers = 0
+    config.training.dataloader_pin_memory = False
+    config.training.gradient_checkpointing = True
+    config.training.warmup_ratio = 0.0
+    config.hpo.n_trials = 1
+    config.hpo.parameters = {
+        "learning_rate": {"values": [trial_params["learning_rate"]]},
+        "gradient_accumulation_steps": {"values": [trial_params["gradient_accumulation_steps"]]},
+    }
+
+    _disable_tracking(monkeypatch)
+    monkeypatch.setattr(train_module, "run_hyperparameter_search", fake_run_hyperparameter_search)
+
+    try:
+        train_llm(config)
+    finally:
+        torch.cuda.empty_cache()
+
+    assert trial_dirs, "expected the fake HPO search to run at least one trial"
+    assert Path(trial_dirs[0]).is_dir(), "expected HPO to create a trial-specific output directory"
+
+    best_config_path = (
+        Path(config.training.output_dir) / config.hpo.sweep_name / "best_hpo_config.yaml"
+    )
+    assert best_config_path.exists(), "expected the best HPO config to be saved"
+
+    best_config = yaml.unsafe_load(best_config_path.read_text(encoding="utf-8"))
+    assert best_config["training"]["learning_rate"] == pytest.approx(trial_params["learning_rate"])
+    assert (
+        best_config["training"]["gradient_accumulation_steps"]
+        == trial_params["gradient_accumulation_steps"]
     )

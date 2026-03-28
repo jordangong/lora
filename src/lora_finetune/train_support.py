@@ -1,7 +1,6 @@
 import copy
 import gc
 import os
-import re
 from typing import Any
 
 import torch
@@ -11,6 +10,7 @@ from rich.table import Table
 from transformers.trainer_callback import TrainerCallback
 
 from .config import BenchmarkEvalConfig, Config
+from .output_paths import resolve_hpo_sweep_output_dir
 from .trainer_hpo import _iter_hpo_parameter_names, build_hpo_compute_objective
 
 
@@ -36,19 +36,7 @@ def _resolve_best_run_hpo_parameters(
 
 
 def _resolve_hpo_best_config_output_dir(config: Config) -> str:
-    output_dir = config.training.output_dir
-    sweep_name = config.hpo.sweep_name
-    if not sweep_name:
-        return output_dir
-
-    safe_sweep_name = re.sub(r"[^A-Za-z0-9._-]+", "_", str(sweep_name)).strip("._")
-    if not safe_sweep_name:
-        return output_dir
-
-    if os.path.basename(os.path.normpath(output_dir)) == safe_sweep_name:
-        return output_dir
-
-    return os.path.join(output_dir, safe_sweep_name)
+    return resolve_hpo_sweep_output_dir(config.training.output_dir, config.hpo.sweep_name)
 
 
 def _log_metrics_to_wandb(

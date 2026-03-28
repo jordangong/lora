@@ -67,6 +67,37 @@ class TestTrainLlm:
         assert saved_config["training"]["report_to"] == "none"
         assert saved_config["lora"]["r"] == 16
 
+    def test_save_hpo_best_config_nests_under_sweep_name_even_when_output_dir_matches(
+        self, monkeypatch, tmp_path
+    ):
+        sweep_name = "llama3-lora-hpo"
+        output_dir = tmp_path / sweep_name
+        config = Config(
+            training=TrainingConfig(output_dir=str(output_dir), report_to="none"),
+            hpo=HPOConfig(
+                enabled=True,
+                sweep_name=sweep_name,
+                parameters={"learning_rate": {"values": [1e-5, 3e-5]}},
+            ),
+        )
+        best_run = SimpleNamespace(hyperparameters={"training": {"learning_rate": 3e-5}})
+
+        monkeypatch.setattr(train_module, "_ensure_runtime_imports", lambda: None)
+        monkeypatch.setattr(
+            train_module,
+            "apply_hpo_parameters_to_config_sections",
+            __import__(
+                "lora_finetune.trainer", fromlist=["apply_hpo_parameters_to_config_sections"]
+            ).apply_hpo_parameters_to_config_sections,
+        )
+
+        train_module._save_hpo_best_config(config, best_run)
+
+        saved_config_path = output_dir / sweep_name / "best_hpo_config.yaml"
+        assert saved_config_path.exists()
+        saved_config = yaml.unsafe_load(saved_config_path.read_text())
+        assert saved_config["training"]["output_dir"] == str(output_dir / sweep_name)
+
     def test_run_trainer_hpo_releases_eager_model_before_search(self, monkeypatch):
         class FakeAccelerator:
             def __init__(self):

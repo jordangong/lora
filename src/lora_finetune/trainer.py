@@ -35,6 +35,7 @@ from .config import (
 from .config import (
     GRPOConfig as ProjectGRPOConfig,
 )
+from .output_paths import resolve_hpo_sweep_output_dir
 from .trainer_hpo import (
     _SUPPORTED_HPO_CONFIG_SECTIONS,
     _WANDB_HPO_RESERVED_KEYS,
@@ -764,6 +765,10 @@ def create_trainer(
             dpo_config=dpo_config,
             grpo_config=grpo_config,
             hpo_config=hpo_config,
+        )
+        training_config.output_dir = resolve_hpo_sweep_output_dir(
+            training_config.output_dir,
+            hpo_config.sweep_name,
         )
 
     wandb_run_name = setup_wandb(

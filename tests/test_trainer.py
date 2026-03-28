@@ -1532,6 +1532,48 @@ class TestCreateTrainer:
         assert callable(trainer.model_init)
         assert trainer.args.output_dir == "./test-output"
 
+    def test_create_trainer_nests_hpo_output_under_sweep_name(self, monkeypatch):
+        model = nn.Linear(10, 5)
+        training_config = TrainingConfig(
+            output_dir="./test-output/llama3-lora-hpo",
+            eval_strategy="steps",
+            load_best_model_at_end=False,
+            report_to="wandb",
+            llm_trainer="transformers",
+            bf16=False,
+            fp16=False,
+        )
+        model_config = ModelConfig(model_type="text_classification")
+        hpo_config = HPOConfig(enabled=True, n_trials=2, sweep_name="llama3-lora-hpo")
+
+        class SimpleDataset(torch.utils.data.Dataset):
+            def __len__(self):
+                return 4
+
+            def __getitem__(self, idx):
+                return {
+                    "input_ids": torch.tensor([1, 2, 3]),
+                    "labels": torch.tensor(1),
+                }
+
+        monkeypatch.setattr(trainer_module, "setup_wandb", lambda *args, **kwargs: None)
+        monkeypatch.setattr(trainer_module, "_sync_wandb_config", lambda *args, **kwargs: None)
+
+        trainer = create_trainer(
+            model=model,
+            training_config=training_config,
+            model_config=model_config,
+            train_dataset=SimpleDataset(),
+            eval_dataset=SimpleDataset(),
+            hpo_config=hpo_config,
+            model_init=lambda trial=None: nn.Linear(10, 5),
+            hpo_config_sections={"training": training_config, "lora": LoraConfig()},
+        )
+
+        assert trainer.args.output_dir == os.path.join(
+            "./test-output", "llama3-lora-hpo", "llama3-lora-hpo"
+        )
+
     def test_create_trainer_with_lora_config(self):
         """Test create_trainer with LoRA config."""
         model = nn.Linear(10, 5)
