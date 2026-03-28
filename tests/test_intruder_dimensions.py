@@ -176,3 +176,44 @@ def test_analyze_model_on_tiny_full_checkpoint(tmp_path: Path):
     assert report.total_intruders == 0
     assert report.num_matrices == 1
     assert report.results[0].weight_name == weight_name
+
+
+def test_analyze_model_emits_progress_events(tmp_path: Path):
+    base_dir = tmp_path / "base"
+    base_dir.mkdir()
+    weight_name = "model.layers.0.self_attn.q_proj.weight"
+    save_file({weight_name: torch.diag(torch.tensor([2.0, 1.0]))}, str(base_dir / "model.safetensors"))
+
+    checkpoint_dir = tmp_path / "run-1" / "checkpoint-10"
+    checkpoint_dir.mkdir(parents=True)
+    save_file(
+        {weight_name: torch.diag(torch.tensor([2.1, 0.9]))},
+        str(checkpoint_dir / "model.safetensors"),
+    )
+
+    phases = []
+
+    def on_progress(event: dict) -> None:
+        phases.append(event["phase"])
+
+    analyze_model(
+        AnalysisConfig(
+            base_model_path=base_dir,
+            tuned_path=checkpoint_dir.parent,
+            epsilon=0.9,
+            k=2,
+            device="cpu",
+        ),
+        progress_callback=on_progress,
+    )
+
+    assert phases == [
+        "start",
+        "load_base",
+        "build_tuned",
+        "svd_base",
+        "svd_tuned",
+        "compare",
+        "matrix_complete",
+        "complete",
+    ]

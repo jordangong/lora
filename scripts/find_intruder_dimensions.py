@@ -7,6 +7,8 @@ import argparse
 import json
 from pathlib import Path
 
+from tqdm.auto import tqdm
+
 from lora_finetune.intruder_dimensions import (
     DEFAULT_LLAMA_MODULE_REGEXES,
     AnalysisConfig,
@@ -60,7 +62,47 @@ def main() -> int:
         device=args.device,
         limit=args.limit,
     )
-    report = analyze_model(config)
+    progress_bar: tqdm | None = None
+
+    def on_progress(event: dict) -> None:
+        nonlocal progress_bar
+        phase = event["phase"]
+        total_matrices = event.get("total_matrices") or 0
+        weight_name = event.get("weight_name")
+        matrix_index = event.get("matrix_index")
+
+        if phase == "start":
+            progress_bar = tqdm(
+                total=total_matrices,
+                desc="Intruder analysis",
+                unit="matrix",
+                dynamic_ncols=True,
+            )
+            return
+
+        if progress_bar is None:
+            return
+
+        if phase == "complete":
+            total_intruders = event.get("total_intruders")
+            progress_bar.set_postfix_str(f"complete total_intruders={total_intruders}")
+            progress_bar.close()
+            progress_bar = None
+            return
+
+        label = phase
+        if matrix_index is not None and total_matrices:
+            label = f"{phase} {matrix_index}/{total_matrices}"
+        if weight_name:
+            short_name = weight_name.replace("model.layers.", "L").replace(".weight", "")
+            progress_bar.set_postfix_str(f"{label} {short_name}")
+        else:
+            progress_bar.set_postfix_str(label)
+
+        if phase == "matrix_complete":
+            progress_bar.update(1)
+
+    report = analyze_model(config, progress_callback=on_progress)
     report_dict = report.to_dict()
 
     if args.output:

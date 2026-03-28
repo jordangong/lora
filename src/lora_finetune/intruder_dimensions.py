@@ -6,7 +6,7 @@ import json
 import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Callable, Literal, Optional
 
 import torch
 from safetensors import safe_open
@@ -64,6 +64,9 @@ class ModelIntruderReport:
 
     def to_dict(self) -> dict:
         return asdict(self)
+
+
+ProgressCallback = Callable[[dict], None]
 
 
 def resolve_checkpoint_dir(path: Path) -> Path:
@@ -186,6 +189,9 @@ def compute_intruders(
     weight_name: str = "<unknown>",
     device: str = "cpu",
     svd_dtype: torch.dtype = torch.float32,
+    progress_callback: Optional[ProgressCallback] = None,
+    matrix_index: Optional[int] = None,
+    total_matrices: Optional[int] = None,
 ) -> MatrixIntruderResult:
     """Compute intruder dimensions for a pair of weight matrices."""
     if base_tensor.ndim != 2 or tuned_tensor.ndim != 2:
@@ -195,7 +201,21 @@ def compute_intruders(
             f"Shape mismatch for {weight_name}: {tuple(base_tensor.shape)} vs {tuple(tuned_tensor.shape)}"
         )
 
+    _emit_progress(
+        progress_callback,
+        phase="svd_base",
+        weight_name=weight_name,
+        matrix_index=matrix_index,
+        total_matrices=total_matrices,
+    )
     base_u = _compute_left_singular_vectors(base_tensor, device=device, svd_dtype=svd_dtype)
+    _emit_progress(
+        progress_callback,
+        phase="svd_tuned",
+        weight_name=weight_name,
+        matrix_index=matrix_index,
+        total_matrices=total_matrices,
+    )
     tuned_u = _compute_left_singular_vectors(tuned_tensor, device=device, svd_dtype=svd_dtype)
 
     max_rank = min(base_u.shape[1], tuned_u.shape[1])
@@ -210,6 +230,13 @@ def compute_intruders(
             intruder_indices=[],
         )
 
+    _emit_progress(
+        progress_callback,
+        phase="compare",
+        weight_name=weight_name,
+        matrix_index=matrix_index,
+        total_matrices=total_matrices,
+    )
     similarities = torch.abs(base_u.transpose(0, 1) @ tuned_u[:, :examined_k])
     max_abs_cosines = similarities.max(dim=0).values.cpu()
     intruder_indices = [
@@ -226,7 +253,10 @@ def compute_intruders(
     )
 
 
-def analyze_model(config: AnalysisConfig) -> ModelIntruderReport:
+def analyze_model(
+    config: AnalysisConfig,
+    progress_callback: Optional[ProgressCallback] = None,
+) -> ModelIntruderReport:
     """Analyze all selected weight matrices for intruder dimensions."""
     base_model_path = config.base_model_path.expanduser().resolve()
     tuned_path = config.tuned_path.expanduser().resolve()
@@ -238,8 +268,30 @@ def analyze_model(config: AnalysisConfig) -> ModelIntruderReport:
         weight_names = weight_names[: config.limit]
 
     results = []
-    for weight_name in weight_names:
+    total_matrices = len(weight_names)
+    _emit_progress(
+        progress_callback,
+        phase="start",
+        total_matrices=total_matrices,
+        tuned_type=tuned_type,
+        resolved_checkpoint_path=str(resolved_checkpoint),
+    )
+    for matrix_index, weight_name in enumerate(weight_names, start=1):
+        _emit_progress(
+            progress_callback,
+            phase="load_base",
+            weight_name=weight_name,
+            matrix_index=matrix_index,
+            total_matrices=total_matrices,
+        )
         base_tensor = load_base_tensor(base_model_path, weight_name)
+        _emit_progress(
+            progress_callback,
+            phase="build_tuned",
+            weight_name=weight_name,
+            matrix_index=matrix_index,
+            total_matrices=total_matrices,
+        )
         tuned_tensor = build_tuned_tensor(base_tensor, resolved_checkpoint, tuned_type, weight_name)
         result = compute_intruders(
             base_tensor,
@@ -249,10 +301,27 @@ def analyze_model(config: AnalysisConfig) -> ModelIntruderReport:
             weight_name=weight_name,
             device=config.device,
             svd_dtype=config.svd_dtype,
+            progress_callback=progress_callback,
+            matrix_index=matrix_index,
+            total_matrices=total_matrices,
         )
         results.append(result)
+        _emit_progress(
+            progress_callback,
+            phase="matrix_complete",
+            weight_name=weight_name,
+            matrix_index=matrix_index,
+            total_matrices=total_matrices,
+            intruder_count=result.intruder_count,
+        )
 
     total_intruders = sum(result.intruder_count for result in results)
+    _emit_progress(
+        progress_callback,
+        phase="complete",
+        total_matrices=total_matrices,
+        total_intruders=total_intruders,
+    )
     return ModelIntruderReport(
         base_model_path=str(base_model_path),
         tuned_path=str(tuned_path),
@@ -331,3 +400,31 @@ def _resolve_device(device: str) -> str:
     if device == "auto":
         return "cuda" if torch.cuda.is_available() else "cpu"
     return device
+
+
+def _emit_progress(
+    progress_callback: Optional[ProgressCallback],
+    *,
+    phase: str,
+    weight_name: Optional[str] = None,
+    matrix_index: Optional[int] = None,
+    total_matrices: Optional[int] = None,
+    tuned_type: Optional[str] = None,
+    resolved_checkpoint_path: Optional[str] = None,
+    intruder_count: Optional[int] = None,
+    total_intruders: Optional[int] = None,
+) -> None:
+    if progress_callback is None:
+        return
+    progress_callback(
+        {
+            "phase": phase,
+            "weight_name": weight_name,
+            "matrix_index": matrix_index,
+            "total_matrices": total_matrices,
+            "tuned_type": tuned_type,
+            "resolved_checkpoint_path": resolved_checkpoint_path,
+            "intruder_count": intruder_count,
+            "total_intruders": total_intruders,
+        }
+    )
