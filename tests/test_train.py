@@ -67,7 +67,7 @@ class TestTrainLlm:
         assert saved_config["training"]["report_to"] == "none"
         assert saved_config["lora"]["r"] == 16
 
-    def test_save_hpo_best_config_nests_under_sweep_name_even_when_output_dir_matches(
+    def test_save_hpo_best_config_does_not_double_nest_when_output_dir_already_has_sweep(
         self, monkeypatch, tmp_path
     ):
         sweep_name = "llama3-lora-hpo"
@@ -93,10 +93,11 @@ class TestTrainLlm:
 
         train_module._save_hpo_best_config(config, best_run)
 
-        saved_config_path = output_dir / sweep_name / "best_hpo_config.yaml"
+        saved_config_path = output_dir / "best_hpo_config.yaml"
         assert saved_config_path.exists()
+        assert not (output_dir / sweep_name / "best_hpo_config.yaml").exists()
         saved_config = yaml.unsafe_load(saved_config_path.read_text())
-        assert saved_config["training"]["output_dir"] == str(output_dir / sweep_name)
+        assert saved_config["training"]["output_dir"] == str(output_dir)
 
     def test_run_trainer_hpo_releases_eager_model_before_search(self, monkeypatch):
         class FakeAccelerator:

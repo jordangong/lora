@@ -10,7 +10,7 @@ from rich.table import Table
 from transformers.trainer_callback import TrainerCallback
 
 from .config import BenchmarkEvalConfig, Config
-from .output_paths import resolve_hpo_sweep_output_dir
+from .output_paths import ensure_hpo_sweep_output_dir
 from .trainer_hpo import _iter_hpo_parameter_names, build_hpo_compute_objective
 
 
@@ -36,7 +36,7 @@ def _resolve_best_run_hpo_parameters(
 
 
 def _resolve_hpo_best_config_output_dir(config: Config) -> str:
-    return resolve_hpo_sweep_output_dir(config.training.output_dir, config.hpo.sweep_name)
+    return ensure_hpo_sweep_output_dir(config.training.output_dir, config.hpo.sweep_name)
 
 
 def _log_metrics_to_wandb(
