@@ -1,0 +1,7 @@
+interface:
+  display_name: "SSH GPU Node"
+  short_description: "Allocate a remote GPU shell for lora"
+  default_prompt: "Use $ssh-gpu-node to print or run the default SSH command that allocates a GPU node for this lora repo."
+
+policy:
+  allow_implicit_invocation: true

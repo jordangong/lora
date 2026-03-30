@@ -35,9 +35,6 @@ env/
 *.swo
 *~
 
-.codex/
-.claude/
-
 # Jupyter
 .ipynb_checkpoints/
 
