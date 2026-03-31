@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
+common_dir="$(cd "$(git rev-parse --git-common-dir 2>/dev/null)" && pwd -P)" || exit 0
+primary_root="$(cd "${common_dir}/.." && pwd -P)"
+
+worktree_venv="${repo_root}/.venv"
+shared_venv="${primary_root}/.venv"
+
+# The primary worktree owns the shared environment.
+if [[ "${repo_root}" == "${primary_root}" ]]; then
+    exit 0
+fi
+
+# Respect any existing worktree-local virtualenv or symlink.
+if [[ -e "${worktree_venv}" || -L "${worktree_venv}" ]]; then
+    exit 0
+fi
+
+if [[ ! -e "${shared_venv}" && ! -L "${shared_venv}" ]]; then
+    printf \
+        'post-checkout: shared virtualenv not found at %s; run "uv sync" in %s first.\n' \
+        "${shared_venv}" \
+        "${primary_root}" \
+        >&2
+    exit 0
+fi
+
+ln -s "${shared_venv}" "${worktree_venv}"
+
+printf 'post-checkout: linked %s -> %s\n' "${worktree_venv}" "${shared_venv}" >&2

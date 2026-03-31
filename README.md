@@ -64,6 +64,16 @@ uv sync --extra flash --extra bnb --extra eval --extra dev
 uv sync --all-extras
 ```
 
+### Sharing `.venv` across worktrees
+
+If you use `git worktree`, you can reuse the main worktree's virtualenv in linked worktrees instead of creating one per checkout.
+
+```bash
+./scripts/install-git-hooks.sh
+```
+
+That configures `core.hooksPath` to use the versioned hook in `.githooks/post-checkout`. After that, new linked worktrees automatically get a `.venv` symlink pointing at the main worktree's `.venv` when it already exists.
+
 ### CUDA index selection
 
 By default, `torch` and `torchvision` are resolved from the `pytorch-cu126` index. To switch CUDA wheels, set `UV_INDEX` when syncing:
