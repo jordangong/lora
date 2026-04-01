@@ -340,9 +340,7 @@ def test_llama3_hpo_config_runs_single_trial_end_to_end(tmp_path, monkeypatch):
     assert trial_dirs, "expected the fake HPO search to run at least one trial"
     assert Path(trial_dirs[0]).is_dir(), "expected HPO to create a trial-specific output directory"
 
-    best_config_path = (
-        Path(config.training.output_dir) / config.hpo.sweep_name / "best_hpo_config.yaml"
-    )
+    best_config_path = Path(config.training.output_dir) / "best_hpo_config.yaml"
     assert best_config_path.exists(), "expected the best HPO config to be saved"
 
     best_config = yaml.unsafe_load(best_config_path.read_text(encoding="utf-8"))
