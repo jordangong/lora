@@ -526,7 +526,7 @@ class TrainingConfig:
     )
     optim: str = field(
         default="adamw_torch_fused",
-        metadata={"help": "Optimizer: adamw_torch_fused, adamw_torch, sgd, etc."},
+        metadata={"help": "Optimizer: adamw_torch_fused, adamw_torch, muon, sgd, etc."},
     )
     seed: int = field(default=42, metadata={"help": "Random seed for reproducibility"})
     data_seed: int = field(default=42, metadata={"help": "Random seed for data sampling"})

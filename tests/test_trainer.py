@@ -20,6 +20,7 @@ from lora_finetune.config import (
     ModelConfig,
     TrainingConfig,
 )
+from lora_finetune.optimizers import HybridMuonAdamW, partition_muon_parameters
 from lora_finetune.trainer import (
     LoraTrainer,
     RichProgressCallback,
@@ -39,6 +40,16 @@ from lora_finetune.trainer import (
 # Disable wandb for tests
 os.environ["WANDB_DISABLED"] = "true"
 os.environ["WANDB_MODE"] = "disabled"
+
+
+class MuonTestModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.linear = nn.Linear(4, 4)
+        self.layernorm = nn.LayerNorm(4)
+        self.embedding = nn.Embedding(8, 4)
+        self.matrix = nn.Parameter(torch.ones(4, 4))
+        self.vector = nn.Parameter(torch.ones(4))
 
 
 class TestGetTrainingArguments:
@@ -477,6 +488,20 @@ class TestGetTrainingArgumentsFunction:
 
         assert args.gradient_checkpointing_kwargs == {"use_reentrant": True}
 
+    def test_training_arguments_preserve_muon_optimizer_name(self):
+        """Test Muon uses a compatibility shim but preserves args.optim."""
+        training_config = TrainingConfig(
+            output_dir="./test-output",
+            optim="muon",
+            bf16=False,
+            fp16=False,
+        )
+        model_config = ModelConfig()
+
+        args = get_training_arguments(training_config, model_config)
+
+        assert args.optim == "muon"
+
     def test_training_arguments_unsloth_gradient_checkpointing_mode_uses_boolean_flag(self):
         """Test explicit Unsloth mode still produces a boolean TrainingArguments flag."""
         training_config = TrainingConfig(
@@ -508,6 +533,71 @@ class TestGetTrainingArgumentsFunction:
         # report_to is converted to a list
         assert "wandb" in args.report_to
         assert args.run_name == "test-run"
+
+
+class TestMuonOptimizers:
+    def test_partition_muon_parameters(self):
+        model = MuonTestModel()
+
+        muon_parameters, adamw_parameters = partition_muon_parameters(model)
+
+        assert {name for name, _ in muon_parameters} == {"linear.weight", "matrix"}
+        assert {name for name, _ in adamw_parameters} == {
+            "linear.bias",
+            "layernorm.weight",
+            "layernorm.bias",
+            "embedding.weight",
+            "vector",
+        }
+
+    def test_hybrid_muon_adamw_state_dict_round_trip(self):
+        muon_parameter = nn.Parameter(torch.ones(2, 2))
+        adamw_parameter = nn.Parameter(torch.ones(2))
+        muon_optimizer = torch.optim.SGD([muon_parameter], lr=0.1)
+        adamw_optimizer = torch.optim.AdamW([adamw_parameter], lr=0.01)
+        hybrid_optimizer = HybridMuonAdamW(
+            muon_optimizer=muon_optimizer,
+            adamw_optimizer=adamw_optimizer,
+        )
+
+        muon_optimizer.state[muon_parameter]["momentum_buffer"] = torch.ones_like(muon_parameter)
+        adamw_optimizer.state[adamw_parameter]["step"] = torch.tensor(1.0)
+        adamw_optimizer.state[adamw_parameter]["exp_avg"] = torch.ones_like(adamw_parameter)
+        adamw_optimizer.state[adamw_parameter]["exp_avg_sq"] = torch.ones_like(adamw_parameter)
+        state_dict = hybrid_optimizer.state_dict()
+
+        muon_parameter_clone = nn.Parameter(torch.zeros(2, 2))
+        adamw_parameter_clone = nn.Parameter(torch.zeros(2))
+        restored_hybrid_optimizer = HybridMuonAdamW(
+            muon_optimizer=torch.optim.SGD([muon_parameter_clone], lr=0.1),
+            adamw_optimizer=torch.optim.AdamW([adamw_parameter_clone], lr=0.01),
+        )
+        restored_hybrid_optimizer.load_state_dict(state_dict)
+
+        assert set(state_dict) == {"state", "param_groups", "muon_optimizer", "adamw_optimizer"}
+        assert (
+            "momentum_buffer"
+            in restored_hybrid_optimizer.muon_optimizer.state[muon_parameter_clone]
+        )
+        assert "exp_avg" in restored_hybrid_optimizer.adamw_optimizer.state[adamw_parameter_clone]
+
+    def test_clear_optimizer_state_recurses_into_child_optimizers(self):
+        muon_parameter = nn.Parameter(torch.ones(2, 2))
+        adamw_parameter = nn.Parameter(torch.ones(2))
+        muon_optimizer = torch.optim.SGD([muon_parameter], lr=0.1)
+        adamw_optimizer = torch.optim.AdamW([adamw_parameter], lr=0.01)
+        hybrid_optimizer = HybridMuonAdamW(
+            muon_optimizer=muon_optimizer,
+            adamw_optimizer=adamw_optimizer,
+        )
+        muon_optimizer.state[muon_parameter]["momentum_buffer"] = torch.ones_like(muon_parameter)
+        adamw_optimizer.state[adamw_parameter]["exp_avg"] = torch.ones_like(adamw_parameter)
+        adamw_optimizer.state[adamw_parameter]["exp_avg_sq"] = torch.ones_like(adamw_parameter)
+
+        trainer_module._clear_optimizer_state(hybrid_optimizer)
+
+        assert muon_optimizer.state == {}
+        assert adamw_optimizer.state == {}
 
 
 class TestComputeMetricsForClassification:
@@ -772,6 +862,30 @@ class TestLoraTrainer:
         assert hasattr(trainer, "create_optimizer")
         assert callable(trainer.create_optimizer)
 
+    def test_lora_trainer_create_optimizer_dispatches_to_muon(self, monkeypatch):
+        from transformers import TrainingArguments
+
+        model = nn.Linear(10, 5)
+        args = TrainingArguments(
+            output_dir="./test-output",
+            num_train_epochs=1,
+            per_device_train_batch_size=1,
+            report_to="none",
+        )
+        args.optim = "muon"
+        trainer = LoraTrainer(model=model, args=args, train_dataset=None)
+        sentinel_optimizer = object()
+        called = {}
+
+        def fake_create_muon_optimizer():
+            called["value"] = True
+            return sentinel_optimizer
+
+        monkeypatch.setattr(trainer, "_create_muon_optimizer", fake_create_muon_optimizer)
+
+        assert trainer.create_optimizer() is sentinel_optimizer
+        assert called["value"] is True
+
     def test_lora_trainer_loraplus_optimizer_method_exists(self):
         """Test that _create_loraplus_optimizer method exists."""
         from transformers import TrainingArguments
@@ -794,6 +908,83 @@ class TestLoraTrainer:
 
         assert hasattr(trainer, "_create_loraplus_optimizer")
         assert callable(trainer._create_loraplus_optimizer)
+
+    def test_lora_trainer_rejects_loraplus_with_muon(self):
+        from transformers import TrainingArguments
+
+        model = nn.Linear(10, 5)
+        args = TrainingArguments(
+            output_dir="./test-output",
+            num_train_epochs=1,
+            per_device_train_batch_size=1,
+            report_to="none",
+        )
+        args.optim = "muon"
+        trainer = LoraTrainer(
+            model=model,
+            args=args,
+            train_dataset=None,
+            lora_config=LoraConfig(method="loraplus"),
+        )
+
+        with pytest.raises(ValueError, match="lora.method='loraplus'"):
+            trainer.create_optimizer()
+
+    def test_lora_trainer_create_muon_optimizer_partitions_parameters(self, monkeypatch):
+        from transformers import TrainingArguments
+
+        class FakeMuon(torch.optim.Optimizer):
+            def __init__(self, params, lr, weight_decay):
+                self.received_params = list(params)
+                defaults = {"lr": lr, "weight_decay": weight_decay}
+                super().__init__(self.received_params, defaults)
+
+            def step(self, closure=None):
+                return None
+
+        monkeypatch.setattr(trainer_module, "is_muon_available", lambda: True)
+        monkeypatch.setattr(torch.optim, "Muon", FakeMuon, raising=False)
+
+        model = MuonTestModel()
+        args = TrainingArguments(
+            output_dir="./test-output",
+            num_train_epochs=1,
+            per_device_train_batch_size=1,
+            report_to="none",
+            learning_rate=2e-4,
+            weight_decay=0.1,
+        )
+        args.optim = "muon"
+        trainer = LoraTrainer(model=model, args=args, train_dataset=None)
+
+        optimizer = trainer._create_muon_optimizer()
+
+        assert isinstance(optimizer, HybridMuonAdamW)
+        assert trainer.optimizer is optimizer
+        assert optimizer.muon_optimizer is not None
+        assert optimizer.adamw_optimizer is not None
+        assert optimizer.muon_optimizer.defaults["lr"] == 2e-4
+        assert optimizer.muon_optimizer.defaults["weight_decay"] == 0.1
+        assert len(optimizer.muon_optimizer.received_params) == 2
+        assert sum(len(group["params"]) for group in optimizer.adamw_optimizer.param_groups) == 5
+
+    def test_lora_trainer_create_muon_optimizer_requires_torch_support(self, monkeypatch):
+        from transformers import TrainingArguments
+
+        monkeypatch.setattr(trainer_module, "is_muon_available", lambda: False)
+
+        model = nn.Linear(10, 5)
+        args = TrainingArguments(
+            output_dir="./test-output",
+            num_train_epochs=1,
+            per_device_train_batch_size=1,
+            report_to="none",
+        )
+        args.optim = "muon"
+        trainer = LoraTrainer(model=model, args=args, train_dataset=None)
+
+        with pytest.raises(ImportError, match="torch.optim.Muon"):
+            trainer._create_muon_optimizer()
 
     def test_lora_trainer_hpo_uses_trial_specific_output_dir(self, monkeypatch):
         from transformers import TrainingArguments

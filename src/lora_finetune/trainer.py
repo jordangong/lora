@@ -35,6 +35,7 @@ from .config import (
 from .config import (
     GRPOConfig as ProjectGRPOConfig,
 )
+from .optimizers import HybridMuonAdamW, is_muon_available, partition_muon_parameters
 from .output_paths import resolve_hpo_sweep_output_dir
 from .trainer_hpo import (
     _SUPPORTED_HPO_CONFIG_SECTIONS,
@@ -126,7 +127,16 @@ def _move_module_to_cpu(module) -> None:
 
 
 def _clear_optimizer_state(optimizer) -> None:
-    if optimizer is None or not hasattr(optimizer, "state"):
+    if optimizer is None:
+        return
+
+    child_optimizers = getattr(optimizer, "optimizers", None)
+    if child_optimizers is not None:
+        for child_optimizer in child_optimizers:
+            _clear_optimizer_state(child_optimizer)
+        return
+
+    if not hasattr(optimizer, "state"):
         return
     state = getattr(optimizer, "state", None)
     if not isinstance(state, dict):
@@ -258,12 +268,33 @@ def _get_training_arguments_kwargs(
     }
 
 
+def _get_transformers_optim_name(optim_name: str) -> str:
+    """Map repo-specific optimizer names to values accepted by TrainingArguments."""
+    if optim_name == "muon":
+        return "adamw_torch"
+    return optim_name
+
+
+def _instantiate_training_arguments(args_cls, kwargs: Dict[str, Any]):
+    """Instantiate TrainingArguments-compatible classes with custom optimizer shims."""
+    raw_optim_name = kwargs.get("optim")
+    compat_kwargs = dict(kwargs)
+    compat_kwargs["optim"] = _get_transformers_optim_name(raw_optim_name)
+    training_args = args_cls(**compat_kwargs)
+    if raw_optim_name == "muon":
+        training_args.optim = "muon"
+    return training_args
+
+
 def get_training_arguments(
     config: TrainingConfig,
     model_config: ModelConfig,
 ) -> TrainingArguments:
     """Create TrainingArguments from config with performance optimizations."""
-    return TrainingArguments(**_get_training_arguments_kwargs(config, model_config))
+    return _instantiate_training_arguments(
+        TrainingArguments,
+        _get_training_arguments_kwargs(config, model_config),
+    )
 
 
 def get_sft_training_arguments(
@@ -278,7 +309,10 @@ def get_sft_training_arguments(
             TRL_SFT_IMPORT_ERROR,
         )
 
-    training_args = SFTConfig(**_get_training_arguments_kwargs(config, model_config))
+    training_args = _instantiate_training_arguments(
+        SFTConfig,
+        _get_training_arguments_kwargs(config, model_config),
+    )
     dataset_kwargs = getattr(training_args, "dataset_kwargs", None) or {}
     dataset_kwargs["skip_prepare_dataset"] = skip_prepare_dataset
     training_args.dataset_kwargs = dataset_kwargs
@@ -351,7 +385,10 @@ def get_dpo_training_arguments(
         kwargs["dataset_num_proc"] = data_config.preprocessing_num_workers
         kwargs["max_length"] = dpo_config.max_length or data_config.max_seq_length
 
-    return TRLDPOConfig(**_filter_init_kwargs(TRLDPOConfig.__init__, kwargs))
+    return _instantiate_training_arguments(
+        TRLDPOConfig,
+        _filter_init_kwargs(TRLDPOConfig.__init__, kwargs),
+    )
 
 
 def get_grpo_training_arguments(
@@ -383,7 +420,10 @@ def get_grpo_training_arguments(
         }
     )
 
-    return TRLGRPOConfig(**_filter_init_kwargs(TRLGRPOConfig.__init__, kwargs))
+    return _instantiate_training_arguments(
+        TRLGRPOConfig,
+        _filter_init_kwargs(TRLGRPOConfig.__init__, kwargs),
+    )
 
 
 def resolve_trainer_type(training_config: TrainingConfig, model_config: ModelConfig) -> str:
@@ -562,16 +602,88 @@ class LoraTrainerMixin:
     def create_optimizer(self):
         """Create optimizer with LoRA+ support for different learning rates."""
         if self.lora_config is not None and self.lora_config.method == "loraplus":
+            if str(getattr(self.args, "optim", "")) == "muon":
+                raise ValueError(
+                    "training.optim='muon' is not supported with lora.method='loraplus' yet. "
+                    "LoRA+ custom per-group learning rates are not integrated with hybrid Muon optimization."
+                )
             return self._create_loraplus_optimizer()
+        if str(getattr(self.args, "optim", "")) == "muon":
+            return self._create_muon_optimizer()
         return super().create_optimizer()
 
-    def _create_loraplus_optimizer(self):
-        """Create LoRA+ optimizer with different LRs for A and B matrices."""
+    @staticmethod
+    def _get_decay_parameter_names(model) -> set[str]:
         from transformers.pytorch_utils import ALL_LAYERNORM_LAYERS
         from transformers.trainer_pt_utils import get_parameter_names
 
-        decay_parameters = get_parameter_names(self.model, ALL_LAYERNORM_LAYERS)
-        decay_parameters = [name for name in decay_parameters if "bias" not in name]
+        decay_parameters = get_parameter_names(model, ALL_LAYERNORM_LAYERS)
+        return {name for name in decay_parameters if "bias" not in name}
+
+    def _create_muon_optimizer(self):
+        """Create a hybrid Muon/AdamW optimizer for eligible parameters."""
+        if not is_muon_available():
+            raise ImportError(
+                "training.optim='muon' requires a PyTorch build exposing torch.optim.Muon."
+            )
+
+        muon_named_parameters, adamw_named_parameters = partition_muon_parameters(self.model)
+        if not muon_named_parameters:
+            raise ValueError(
+                "training.optim='muon' did not find any eligible trainable 2D hidden-layer "
+                "parameters. Muon is only applied to 2D non-embedding, non-norm, non-bias weights."
+            )
+
+        muon_optimizer = torch.optim.Muon(
+            [parameter for _, parameter in muon_named_parameters],
+            lr=self.args.learning_rate,
+            weight_decay=self.args.weight_decay,
+        )
+
+        adamw_optimizer = None
+        if adamw_named_parameters:
+            decay_parameters = self._get_decay_parameter_names(self.model)
+            adamw_parameter_groups = [
+                {
+                    "params": [
+                        parameter
+                        for name, parameter in adamw_named_parameters
+                        if name in decay_parameters
+                    ],
+                    "weight_decay": self.args.weight_decay,
+                },
+                {
+                    "params": [
+                        parameter
+                        for name, parameter in adamw_named_parameters
+                        if name not in decay_parameters
+                    ],
+                    "weight_decay": 0.0,
+                },
+            ]
+            adamw_parameter_groups = [group for group in adamw_parameter_groups if group["params"]]
+            if adamw_parameter_groups:
+                adamw_optimizer = torch.optim.AdamW(
+                    adamw_parameter_groups,
+                    lr=self.args.learning_rate,
+                    betas=(self.args.adam_beta1, self.args.adam_beta2),
+                    eps=self.args.adam_epsilon,
+                )
+
+        self.optimizer = HybridMuonAdamW(
+            muon_optimizer=muon_optimizer,
+            adamw_optimizer=adamw_optimizer,
+        )
+        logger.info(
+            "Hybrid Muon optimizer created with %s Muon parameters and %s AdamW fallback parameters",
+            len(muon_named_parameters),
+            len(adamw_named_parameters),
+        )
+        return self.optimizer
+
+    def _create_loraplus_optimizer(self):
+        """Create LoRA+ optimizer with different LRs for A and B matrices."""
+        decay_parameters = self._get_decay_parameter_names(self.model)
 
         lr_ratio = self.lora_config.loraplus_lr_ratio
         base_lr = self.args.learning_rate

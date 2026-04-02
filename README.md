@@ -150,6 +150,7 @@ uv run lora-train \
 The `configs/` directory currently includes:
 
 - `llama3_lora.yaml`
+- `llama3_muon_lora.yaml`
 - `llama3_lora_hpo.yaml`
 - `llama3_dpo.yaml`
 - `llama3_grpo.yaml`
@@ -179,6 +180,15 @@ Equivalent module invocation:
 uv run python -m lora_finetune.train --config configs/llama3_lora.yaml
 ```
 
+### Muon optimizer
+
+Set `training.optim: muon` or pass `--optim muon` to enable hybrid Muon support.
+
+- Muon is applied to eligible trainable 2D hidden-layer weights.
+- AdamW is used automatically for remaining trainable parameters such as biases, norms, and embeddings.
+- This requires a PyTorch build that exposes `torch.optim.Muon`.
+- `lora.method=loraplus` is not supported with `training.optim=muon` in this first cut.
+
 ### CLI overrides
 
 Most non-dict config fields are exposed as CLI flags, including nested benchmark and augmentation settings via prefixes.
@@ -197,6 +207,7 @@ Most non-dict config fields are exposed as CLI flags, including nested benchmark
 
 - **Training fields**
   - `--learning_rate`
+  - `--optim`
   - `--trainer_type`
   - `--llm_trainer`
   - `--report_to`

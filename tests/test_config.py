@@ -302,12 +302,14 @@ class TestTrainingConfig:
             learning_rate=1e-4,
             per_device_train_batch_size=8,
             gradient_accumulation_steps=8,
+            optim="muon",
         )
         assert config.output_dir == "/custom/output"
         assert config.num_train_epochs == 5
         assert config.learning_rate == 1e-4
         assert config.per_device_train_batch_size == 8
         assert config.gradient_accumulation_steps == 8
+        assert config.optim == "muon"
         assert config.effective_batch_size == 64
 
     def test_accepts_unsloth_gradient_checkpointing_mode(self):
@@ -499,6 +501,19 @@ class TestConfig:
         finally:
             os.unlink(temp_path)
 
+    def test_from_yaml_preserves_muon_optimizer(self):
+        yaml_content = {"training": {"optim": "muon"}}
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            yaml.dump(yaml_content, f)
+            temp_path = f.name
+
+        try:
+            config = Config.from_yaml(temp_path)
+            assert config.training.optim == "muon"
+        finally:
+            os.unlink(temp_path)
+
     def test_to_yaml(self):
         """Test saving configuration to YAML file."""
         config = Config()
@@ -506,6 +521,7 @@ class TestConfig:
         config.lora.r = 32
         config.training.per_device_train_batch_size = 6
         config.training.gradient_accumulation_steps = 3
+        config.training.optim = "muon"
         config.hpo.enabled = True
         config.hpo.n_trials = 6
 
@@ -522,6 +538,7 @@ class TestConfig:
             assert "saved-model" in content
             assert "r: 32" in content
             assert "effective_batch_size: 18" in content
+            assert "optim: muon" in content
             assert "enabled: true" in content
             assert "n_trials: 6" in content
         finally:

@@ -17,6 +17,7 @@ from lora_finetune.train import train_llm, train_text_classification, train_visi
 _RUN_ROBERTA_INTEGRATION = os.getenv("LORA_RUN_ROBERTA_INTEGRATION") == "1"
 _RUN_VIT_INTEGRATION = os.getenv("LORA_RUN_VIT_INTEGRATION") == "1"
 _RUN_LLAMA3_INTEGRATION = os.getenv("LORA_RUN_LLAMA3_INTEGRATION") == "1"
+_RUN_LLAMA3_MUON_INTEGRATION = os.getenv("LORA_RUN_LLAMA3_MUON_INTEGRATION") == "1"
 _RUN_LLAMA3_HPO_INTEGRATION = os.getenv("LORA_RUN_LLAMA3_HPO_INTEGRATION") == "1"
 
 _DEFAULT_ROBERTA_MODEL_NAME_OR_PATH = "hf-internal-testing/tiny-random-roberta"
@@ -27,6 +28,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 _ROBERTA_CONFIG_PATH = _REPO_ROOT / "configs" / "roberta_text_classification_lora.yaml"
 _VIT_CONFIG_PATH = _REPO_ROOT / "configs" / "vit_lora.yaml"
 _LLAMA3_CONFIG_PATH = _REPO_ROOT / "configs" / "llama3_lora.yaml"
+_LLAMA3_MUON_CONFIG_PATH = _REPO_ROOT / "configs" / "llama3_muon_lora.yaml"
 _LLAMA3_HPO_CONFIG_PATH = _REPO_ROOT / "configs" / "llama3_lora_hpo.yaml"
 
 
@@ -234,6 +236,80 @@ def test_llama3_sft_config_trains_end_to_end(tmp_path, monkeypatch):
     config.training.logging_steps = 1
     config.training.report_to = "none"
     config.training.optim = "adamw_torch"
+    config.training.fp16 = True
+    config.training.bf16 = False
+    config.training.dataloader_num_workers = 0
+    config.training.dataloader_pin_memory = False
+    config.training.gradient_checkpointing = True
+    config.training.warmup_ratio = 0.0
+
+    _disable_tracking(monkeypatch)
+
+    try:
+        train_llm(config)
+    finally:
+        torch.cuda.empty_cache()
+
+    _assert_saved_files(
+        config.training.output_dir,
+        ["adapter_config.json", "adapter_model.safetensors", "tokenizer_config.json"],
+    )
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
+def test_llama3_muon_sft_config_trains_end_to_end(tmp_path, monkeypatch):
+    """Run a short real Muon training loop with the shipped Llama3 Muon config."""
+    if not _RUN_LLAMA3_MUON_INTEGRATION:
+        pytest.skip(
+            "Set LORA_RUN_LLAMA3_MUON_INTEGRATION=1 to run the Llama3 Muon integration test."
+        )
+
+    train_rows = [
+        {"prompt": "Translate to French: cat", "completion": " chat"},
+        {"prompt": "Translate to French: dog", "completion": " chien"},
+        {"prompt": "Translate to French: house", "completion": " maison"},
+        {"prompt": "Translate to French: red", "completion": " rouge"},
+        {"prompt": "Translate to French: blue", "completion": " bleu"},
+        {"prompt": "Translate to French: green", "completion": " vert"},
+    ]
+    eval_rows = [
+        {"prompt": "Translate to French: bird", "completion": " oiseau"},
+        {"prompt": "Translate to French: black", "completion": " noir"},
+    ]
+
+    train_file = tmp_path / "llama3_muon_train.jsonl"
+    validation_file = tmp_path / "llama3_muon_validation.jsonl"
+    _write_jsonl(train_file, train_rows)
+    _write_jsonl(validation_file, eval_rows)
+
+    config = Config.from_yaml(str(_LLAMA3_MUON_CONFIG_PATH))
+    config.model.model_name_or_path = os.getenv(
+        "LORA_LLAMA3_MUON_MODEL_NAME_OR_PATH",
+        _DEFAULT_LLAMA3_MODEL_NAME_OR_PATH,
+    )
+    config.model.use_flash_attention_2 = False
+    config.model.torch_dtype = "float16"
+    config.data.dataset_name = None
+    config.data.dataset_config_name = None
+    config.data.train_file = str(train_file)
+    config.data.validation_file = str(validation_file)
+    config.data.eval_split_ratio = None
+    config.data.preprocessing_num_workers = 1
+    config.data.max_seq_length = 128
+    config.data.max_train_samples = len(train_rows)
+    config.data.max_eval_samples = len(eval_rows)
+    config.benchmark_eval.enabled = False
+    config.training.output_dir = str(tmp_path / "outputs")
+    config.training.num_train_epochs = 1
+    config.training.per_device_train_batch_size = 1
+    config.training.per_device_eval_batch_size = 1
+    config.training.gradient_accumulation_steps = 1
+    config.training.eval_strategy = "epoch"
+    config.training.save_strategy = "no"
+    config.training.load_best_model_at_end = False
+    config.training.logging_steps = 1
+    config.training.report_to = "none"
+    config.training.optim = "muon"
     config.training.fp16 = True
     config.training.bf16 = False
     config.training.dataloader_num_workers = 0

@@ -155,6 +155,14 @@ class TestAddDataclassArgs:
 
         assert args.trainer_type == "dpo"
 
+    def test_add_training_config_muon_optimizer_arg(self):
+        parser = argparse.ArgumentParser()
+        _add_dataclass_args(parser, TrainingConfig)
+
+        args = parser.parse_args(["--optim", "muon"])
+
+        assert args.optim == "muon"
+
     def test_add_dpo_and_grpo_prefixed_args(self):
         parser = argparse.ArgumentParser()
         _add_dataclass_args(parser, DPOConfig, prefix="dpo_")
@@ -445,6 +453,47 @@ class TestBuildConfig:
         assert isinstance(config, Config)
         assert isinstance(config.model, ModelConfig)
         assert isinstance(config.lora, LoraConfig)
+
+    def test_build_config_preserves_muon_optimizer(self):
+        args = argparse.Namespace(config=None, optim="muon")
+        args.__dict__.update(
+            {f"lora_{k}": None for k in vars(LoraConfig()).keys() if not k.startswith("_")}
+        )
+        args.__dict__.update(
+            {f"no_lora_{k}": None for k in vars(LoraConfig()).keys() if not k.startswith("_")}
+        )
+        args.__dict__.update({k: None for k in vars(ModelConfig()).keys() if not k.startswith("_")})
+        args.__dict__.update(
+            {f"no_{k}": None for k in vars(ModelConfig()).keys() if not k.startswith("_")}
+        )
+        args.__dict__.update({k: None for k in vars(DataConfig()).keys() if not k.startswith("_")})
+        args.__dict__.update(
+            {f"no_{k}": None for k in vars(DataConfig()).keys() if not k.startswith("_")}
+        )
+        args.__dict__.update(
+            {
+                k: None
+                for k in vars(TrainingConfig()).keys()
+                if not k.startswith("_") and k != "optim"
+            }
+        )
+        args.__dict__.update(
+            {f"no_{k}": None for k in vars(TrainingConfig()).keys() if not k.startswith("_")}
+        )
+        args.__dict__.update(
+            {f"aug_{k}": None for k in vars(AugmentationConfig()).keys() if not k.startswith("_")}
+        )
+        args.__dict__.update(
+            {
+                f"no_aug_{k}": None
+                for k in vars(AugmentationConfig()).keys()
+                if not k.startswith("_")
+            }
+        )
+
+        config = build_config(args)
+
+        assert config.training.optim == "muon"
 
     def test_build_config_applies_dpo_and_grpo_args(self):
         args = argparse.Namespace(
