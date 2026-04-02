@@ -412,7 +412,9 @@ class HPOWandbCallback(WandbCallback):
         if self._wandb is None:
             return
         if state.is_hyper_param_search:
-            self._wandb.finish()
+            # W&B sweep agents already create the per-trial run before Trainer.train() starts.
+            # Finishing here closes that active run prematurely, which produces duplicate W&B
+            # initialization logs and can trigger "run finished" downstream integrations early.
             self._initialized = False
             args.run_name = None
         if not self._initialized:

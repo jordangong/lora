@@ -1434,7 +1434,7 @@ class TestSetupWandb:
         assert trainer.kwargs["project"] == "project-from-training"
         assert trainer.kwargs["metric"] == "eval/loss"
 
-    def test_hpo_wandb_callback_resets_and_reinitializes_each_trial(self):
+    def test_hpo_wandb_callback_reinitializes_each_trial_without_finishing_run(self):
         callback = trainer_module.HPOWandbCallback.__new__(trainer_module.HPOWandbCallback)
         events = []
 
@@ -1459,9 +1459,7 @@ class TestSetupWandb:
         callback.on_train_begin(args, second_state, None, model="model-2")
 
         assert events == [
-            "finish",
             ("setup", None, "trial-1", "model-1"),
-            "finish",
             ("setup", None, "trial-2", "model-2"),
         ]
         assert args.run_name is None
