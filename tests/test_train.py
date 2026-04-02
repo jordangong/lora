@@ -396,6 +396,139 @@ class TestTrainLlm:
             )
         ]
 
+    def test_run_trainer_training_forces_last_step_eval_between_eval_intervals(self):
+        events = []
+
+        class CleanupCallback:
+            def cleanup(self):
+                events.append("cleanup")
+
+        class FakeTrainer:
+            def __init__(self):
+                self.args = SimpleNamespace(
+                    eval_strategy="steps",
+                    eval_steps=4,
+                    eval_delay=0,
+                    load_best_model_at_end=False,
+                )
+                self.state = SimpleNamespace(global_step=0, max_steps=5)
+                self.eval_dataset = object()
+                self.callback_handler = SimpleNamespace(callbacks=[CleanupCallback()])
+
+            def add_callback(self, callback):
+                self.callback_handler.callbacks.append(callback)
+
+            def train(self, resume_from_checkpoint=None):
+                events.append(("train", resume_from_checkpoint))
+                control = SimpleNamespace(should_evaluate=False)
+                for callback in list(self.callback_handler.callbacks):
+                    on_train_begin = getattr(callback, "on_train_begin", None)
+                    if callable(on_train_begin):
+                        on_train_begin(self.args, self.state, control)
+
+                self.state.global_step = self.state.max_steps
+                for callback in list(self.callback_handler.callbacks):
+                    on_step_end = getattr(callback, "on_step_end", None)
+                    if callable(on_step_end):
+                        updated_control = on_step_end(self.args, self.state, control)
+                        if updated_control is not None:
+                            control = updated_control
+
+                if control.should_evaluate:
+                    metrics = self.evaluate(metric_key_prefix="eval")
+                    for callback in list(self.callback_handler.callbacks):
+                        on_evaluate = getattr(callback, "on_evaluate", None)
+                        if callable(on_evaluate):
+                            on_evaluate(self.args, self.state, control, metrics=metrics)
+
+                for callback in list(self.callback_handler.callbacks):
+                    on_train_end = getattr(callback, "on_train_end", None)
+                    if callable(on_train_end):
+                        on_train_end(self.args, self.state, control)
+
+            def evaluate(self, metric_key_prefix="eval"):
+                events.append(("evaluate", metric_key_prefix))
+                if metric_key_prefix == "eval":
+                    return {"eval_loss": 0.1, "eval_runtime": 2.5}
+                return {"final_eval_loss": 0.1, "final_eval_runtime": 2.5}
+
+        trainer = FakeTrainer()
+
+        train_module._run_trainer_training(trainer, resume_from_checkpoint="checkpoint-11")
+
+        assert events == [
+            ("train", "checkpoint-11"),
+            ("evaluate", "eval"),
+            "cleanup",
+        ]
+
+    def test_run_final_trainer_evaluation_reuses_captured_last_step_metrics(self, monkeypatch):
+        logged = []
+
+        monkeypatch.setitem(
+            __import__("sys").modules,
+            "wandb",
+            SimpleNamespace(
+                run=object(),
+                log=lambda payload, step=None: logged.append((payload, step)),
+            ),
+        )
+
+        class FakeTrainer:
+            def __init__(self):
+                self.args = SimpleNamespace(load_best_model_at_end=False)
+                self.eval_dataset = object()
+                self.state = SimpleNamespace(global_step=456)
+                self._final_step_eval_metrics = {
+                    "eval_loss": 0.2,
+                    "eval_runtime": 3.5,
+                    "train_loss": 9.9,
+                }
+
+            def evaluate(self, metric_key_prefix="eval"):
+                raise AssertionError("final evaluation should reuse captured last-step metrics")
+
+        trainer = FakeTrainer()
+
+        metrics = train_module._run_final_trainer_evaluation(trainer)
+
+        assert metrics == {
+            "final_eval_loss": 0.2,
+            "final_eval_runtime": 3.5,
+            "train_loss": 9.9,
+        }
+        assert logged == [
+            (
+                {
+                    "final/eval/loss": 0.2,
+                    "final/eval/runtime": 3.5,
+                    "train/global_step": 456,
+                },
+                456,
+            )
+        ]
+
+    def test_run_final_trainer_evaluation_re_evaluates_loaded_best_model(self):
+        events = []
+
+        class FakeTrainer:
+            def __init__(self):
+                self.args = SimpleNamespace(load_best_model_at_end=True)
+                self.eval_dataset = object()
+                self.state = SimpleNamespace(global_step=789)
+                self._final_step_eval_metrics = {"eval_loss": 0.2}
+
+            def evaluate(self, metric_key_prefix="eval"):
+                events.append(("evaluate", metric_key_prefix))
+                return {"final_eval_loss": 0.05}
+
+        trainer = FakeTrainer()
+
+        metrics = train_module._run_final_trainer_evaluation(trainer)
+
+        assert metrics == {"final_eval_loss": 0.05}
+        assert events == [("evaluate", "final_eval")]
+
     def test_run_benchmark_eval_logs_metrics_to_wandb_with_trainer_step(self, monkeypatch):
         logged = []
 

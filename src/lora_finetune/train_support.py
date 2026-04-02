@@ -147,15 +147,26 @@ def run_final_trainer_evaluation(console, trainer):
         return None
 
     global_step = getattr(getattr(trainer, "state", None), "global_step", None)
-    wandb_callback = _pop_wandb_callback(trainer)
-    try:
-        with Status("[bold blue]Running final evaluation...", console=console):
-            metrics = evaluate(metric_key_prefix="final_eval")
-    finally:
-        if wandb_callback is not None:
-            add_callback = getattr(trainer, "add_callback", None)
-            if callable(add_callback):
-                add_callback(wandb_callback)
+    metrics = None
+    training_args = getattr(trainer, "args", None)
+    load_best_model_at_end = bool(getattr(training_args, "load_best_model_at_end", False))
+    captured_final_step_metrics = getattr(trainer, "_final_step_eval_metrics", None)
+    if captured_final_step_metrics and not load_best_model_at_end:
+        metrics = _replace_metric_prefix(
+            dict(captured_final_step_metrics),
+            source_prefix="eval",
+            target_prefix="final_eval",
+        )
+    else:
+        wandb_callback = _pop_wandb_callback(trainer)
+        try:
+            with Status("[bold blue]Running final evaluation...", console=console):
+                metrics = evaluate(metric_key_prefix="final_eval")
+        finally:
+            if wandb_callback is not None:
+                add_callback = getattr(trainer, "add_callback", None)
+                if callable(add_callback):
+                    add_callback(wandb_callback)
 
     _log_metrics_to_wandb(
         _extract_prefixed_metrics(metrics, prefix="final_eval"),
@@ -170,6 +181,47 @@ class _FinalEvaluationCallback(TrainerCallback):
         self.trainer = trainer
         self.final_evaluation_fn = final_evaluation_fn
         self.ran = False
+
+    def on_train_begin(self, args, state, control, **kwargs):
+        self.ran = False
+        setattr(self.trainer, "_final_step_eval_metrics", None)
+        return control
+
+    def on_step_end(self, args, state, control, **kwargs):
+        eval_dataset = getattr(self.trainer, "eval_dataset", None)
+        evaluate = getattr(self.trainer, "evaluate", None)
+        if eval_dataset is None or not callable(evaluate):
+            return control
+
+        if str(getattr(args, "eval_strategy", "no")).lower() != "steps":
+            return control
+
+        max_steps = getattr(state, "max_steps", 0) or 0
+        if max_steps <= 0 or getattr(state, "global_step", 0) < max_steps:
+            return control
+
+        eval_steps = getattr(state, "eval_steps", None)
+        if eval_steps is None:
+            eval_steps = getattr(args, "eval_steps", None)
+        if eval_steps is None or eval_steps <= 0:
+            return control
+
+        eval_delay = getattr(args, "eval_delay", 0) or 0
+        if getattr(state, "global_step", 0) < eval_delay:
+            return control
+
+        if getattr(state, "global_step", 0) % eval_steps != 0:
+            control.should_evaluate = True
+        return control
+
+    def on_evaluate(self, args, state, control, metrics=None, **kwargs):
+        if metrics is None:
+            return control
+
+        max_steps = getattr(state, "max_steps", 0) or 0
+        if max_steps > 0 and getattr(state, "global_step", 0) >= max_steps:
+            setattr(self.trainer, "_final_step_eval_metrics", dict(metrics))
+        return control
 
     def on_train_end(self, args, state, control, **kwargs):
         self.final_evaluation_fn(self.trainer)
