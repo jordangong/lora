@@ -25,7 +25,7 @@ class AnalysisConfig:
     tuned_path: Path
     epsilon: float = 0.5
     k: int = 10
-    module_regexes: list[str] = field(default_factory=lambda: list(DEFAULT_LLAMA_MODULE_REGEXES))
+    module_regexes: Optional[list[str]] = None
     device: str = field(
         default_factory=lambda: "cuda" if torch.cuda.is_available() else "cpu"
     )
@@ -60,6 +60,8 @@ class ModelIntruderReport:
     svd_dtype: str
     total_intruders: int
     num_matrices: int
+    skipped_matrices: int
+    skipped_weights: list[str]
     results: list[MatrixIntruderResult]
 
     def to_dict(self) -> dict:
@@ -105,21 +107,30 @@ def detect_tuned_type(path: Path) -> Literal["full", "lora"]:
     raise FileNotFoundError(f"Could not detect checkpoint type under {path}")
 
 
-def iter_target_weight_names(base_model_path: Path, module_regexes: list[str]) -> list[str]:
-    """Return weight names matching the configured module regex filters."""
-    index = _load_weight_map(base_model_path)
-    return filter_weight_names(index.keys(), module_regexes)
+def iter_target_weight_names(
+    base_model_path: Path,
+    module_regexes: Optional[list[str]] = None,
+) -> list[str]:
+    """Return 2D weight names, optionally narrowed by regex filters."""
+    weight_shapes = _load_weight_shapes(base_model_path)
+    return filter_weight_names(weight_shapes, module_regexes)
 
 
-def filter_weight_names(weight_names: list[str] | tuple[str, ...], module_regexes: list[str]) -> list[str]:
+def filter_weight_names(
+    weight_shapes: dict[str, tuple[int, ...]],
+    module_regexes: Optional[list[str]] = None,
+) -> list[str]:
     """Filter weight names down to matching 2D weight matrices."""
-    patterns = [re.compile(pattern) for pattern in module_regexes]
+    patterns = [re.compile(pattern) for pattern in module_regexes or []]
     filtered = []
-    for weight_name in sorted(weight_names):
+    for weight_name in sorted(weight_shapes):
         if not weight_name.endswith(".weight"):
             continue
-        if any(pattern.search(weight_name) for pattern in patterns):
-            filtered.append(weight_name)
+        if len(weight_shapes[weight_name]) != 2:
+            continue
+        if patterns and not any(pattern.search(weight_name) for pattern in patterns):
+            continue
+        filtered.append(weight_name)
     return filtered
 
 
@@ -176,8 +187,44 @@ def build_tuned_tensor(
     if tuned_type == "full":
         return load_full_ft_tensor(tuned_checkpoint_path, weight_name)
     if tuned_type == "lora":
-        return base_tensor + load_lora_delta_tensor(tuned_checkpoint_path, weight_name)
+        return load_lora_tuned_tensor(base_tensor, tuned_checkpoint_path, weight_name)
     raise ValueError(f"Unsupported tuned type: {tuned_type}")
+
+
+def load_lora_tuned_tensor(
+    base_tensor: torch.Tensor,
+    tuned_checkpoint_path: Path,
+    weight_name: str,
+) -> torch.Tensor:
+    """Return the effective tuned tensor for a LoRA checkpoint."""
+    tuned_checkpoint_path = tuned_checkpoint_path.expanduser().resolve()
+    adapter_path = tuned_checkpoint_path / "adapter_model.safetensors"
+    if not adapter_path.exists():
+        raise FileNotFoundError(f"Missing LoRA adapter weights: {adapter_path}")
+
+    direct_weight_key = f"base_model.model.{weight_name}"
+    prefix = _weight_name_to_lora_prefix(weight_name)
+    key_a = f"{prefix}.lora_A.weight"
+    key_b = f"{prefix}.lora_B.weight"
+
+    with safe_open(str(adapter_path), framework="pt", device="cpu") as handle:
+        keys = set(handle.keys())
+        if direct_weight_key in keys:
+            return handle.get_tensor(direct_weight_key)
+        has_a = key_a in keys
+        has_b = key_b in keys
+        if has_a and has_b:
+            adapter_config = _load_lora_adapter_config(tuned_checkpoint_path)
+            lora_a = handle.get_tensor(key_a)
+            lora_b = handle.get_tensor(key_b)
+            scale = adapter_config["lora_alpha"] / adapter_config["r"]
+            return base_tensor + (lora_b @ lora_a) * scale
+        if has_a != has_b:
+            missing = [key for key, present in ((key_a, has_a), (key_b, has_b)) if not present]
+            raise KeyError(
+                f"Incomplete LoRA adapter keys for {weight_name}: {', '.join(missing)}"
+            )
+    return base_tensor
 
 
 def compute_intruders(
@@ -268,6 +315,7 @@ def analyze_model(
         weight_names = weight_names[: config.limit]
 
     results = []
+    skipped_weights = []
     total_matrices = len(weight_names)
     _emit_progress(
         progress_callback,
@@ -293,6 +341,16 @@ def analyze_model(
             total_matrices=total_matrices,
         )
         tuned_tensor = build_tuned_tensor(base_tensor, resolved_checkpoint, tuned_type, weight_name)
+        if base_tensor.shape != tuned_tensor.shape:
+            skipped_weights.append(weight_name)
+            _emit_progress(
+                progress_callback,
+                phase="matrix_skipped",
+                weight_name=weight_name,
+                matrix_index=matrix_index,
+                total_matrices=total_matrices,
+            )
+            continue
         result = compute_intruders(
             base_tensor,
             tuned_tensor,
@@ -333,6 +391,8 @@ def analyze_model(
         svd_dtype=str(config.svd_dtype).replace("torch.", ""),
         total_intruders=total_intruders,
         num_matrices=len(results),
+        skipped_matrices=len(skipped_weights),
+        skipped_weights=skipped_weights,
         results=results,
     )
 
@@ -360,6 +420,21 @@ def _load_weight_map(model_dir: Path) -> dict[str, str]:
     raise FileNotFoundError(f"No model.safetensors or model.safetensors.index.json found under {model_dir}")
 
 
+def _load_weight_shapes(model_dir: Path) -> dict[str, tuple[int, ...]]:
+    weight_map = _load_weight_map(model_dir)
+    shapes = {}
+    grouped_keys: dict[str, list[str]] = {}
+    for weight_name, file_name in weight_map.items():
+        grouped_keys.setdefault(file_name, []).append(weight_name)
+
+    for file_name, weight_names in grouped_keys.items():
+        tensor_file = model_dir.expanduser().resolve() / file_name
+        with safe_open(str(tensor_file), framework="pt", device="cpu") as handle:
+            for weight_name in weight_names:
+                shapes[weight_name] = _get_tensor_shape(handle, weight_name)
+    return shapes
+
+
 def _load_tensor_from_model_dir(model_dir: Path, weight_name: str) -> torch.Tensor:
     weight_map = _load_weight_map(model_dir)
     if weight_name not in weight_map:
@@ -374,6 +449,13 @@ def _weight_name_to_lora_prefix(weight_name: str) -> str:
     if not weight_name.endswith(".weight"):
         raise ValueError(f"Unexpected base weight name: {weight_name}")
     return f"base_model.model.{weight_name[:-7]}"
+
+
+def _load_lora_adapter_config(tuned_checkpoint_path: Path) -> dict:
+    adapter_config_path = tuned_checkpoint_path / "adapter_config.json"
+    if not adapter_config_path.exists():
+        raise FileNotFoundError(f"Missing LoRA adapter config: {adapter_config_path}")
+    return json.loads(adapter_config_path.read_text())
 
 
 def _compute_left_singular_vectors(
@@ -400,6 +482,13 @@ def _resolve_device(device: str) -> str:
     if device == "auto":
         return "cuda" if torch.cuda.is_available() else "cpu"
     return device
+
+
+def _get_tensor_shape(handle: safe_open, weight_name: str) -> tuple[int, ...]:
+    tensor_slice = handle.get_slice(weight_name)
+    if hasattr(tensor_slice, "get_shape"):
+        return tuple(tensor_slice.get_shape())
+    return tuple(handle.get_tensor(weight_name).shape)
 
 
 def _emit_progress(

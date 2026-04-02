@@ -252,6 +252,8 @@ The repository includes a standalone script for measuring intruder dimensions fr
 
 Documentation for the feature is in [docs/intruder_dimensions.md](/home/yizheng/repos/lora/docs/intruder_dimensions.md).
 
+By default it analyzes all 2D weight matrices, so it works across LLaMA, Mistral, Qwen, RoBERTa, ViT, and similar architectures. Use `--module-regex` if you want to narrow the scope.
+
 Quick example:
 
 ```bash

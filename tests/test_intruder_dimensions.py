@@ -104,6 +104,39 @@ def test_build_tuned_tensor_for_lora(tmp_path: Path):
     torch.testing.assert_close(tuned, expected)
 
 
+def test_build_tuned_tensor_for_lora_returns_base_when_weight_is_untouched(tmp_path: Path):
+    checkpoint_dir = tmp_path / "checkpoint-1"
+    checkpoint_dir.mkdir()
+    (checkpoint_dir / "adapter_config.json").write_text(json.dumps({"r": 1, "lora_alpha": 1}))
+    save_file({}, str(checkpoint_dir / "adapter_model.safetensors"))
+
+    base = torch.tensor([[1.0, 2.0], [3.0, 4.0]])
+    tuned = build_tuned_tensor(
+        base,
+        checkpoint_dir,
+        "lora",
+        "encoder.layer.0.attention.query.weight",
+    )
+
+    torch.testing.assert_close(tuned, base)
+
+
+def test_build_tuned_tensor_for_lora_uses_modules_to_save_weight(tmp_path: Path):
+    checkpoint_dir = tmp_path / "checkpoint-1"
+    checkpoint_dir.mkdir()
+    (checkpoint_dir / "adapter_config.json").write_text(json.dumps({"r": 1, "lora_alpha": 1}))
+    saved_weight = torch.tensor([[9.0, 8.0], [7.0, 6.0]])
+    save_file(
+        {"base_model.model.classifier.weight": saved_weight},
+        str(checkpoint_dir / "adapter_model.safetensors"),
+    )
+
+    base = torch.zeros(2, 2)
+    tuned = build_tuned_tensor(base, checkpoint_dir, "lora", "classifier.weight")
+
+    torch.testing.assert_close(tuned, saved_weight)
+
+
 def test_detect_tuned_type(tmp_path: Path):
     full_dir = tmp_path / "full"
     full_dir.mkdir()
@@ -132,21 +165,39 @@ def test_resolve_checkpoint_dir_uses_latest_checkpoint(tmp_path: Path):
 
 
 def test_filter_weight_names_keeps_llama_projection_weights():
-    names = [
-        "model.layers.0.self_attn.q_proj.weight",
-        "model.layers.0.self_attn.q_proj.bias",
-        "model.layers.0.self_attn.k_proj.weight",
-        "model.layers.0.mlp.up_proj.weight",
-        "model.layers.0.input_layernorm.weight",
-        "lm_head.weight",
-    ]
+    weight_shapes = {
+        "model.layers.0.self_attn.q_proj.weight": (4096, 4096),
+        "model.layers.0.self_attn.q_proj.bias": (4096,),
+        "model.layers.0.self_attn.k_proj.weight": (4096, 4096),
+        "model.layers.0.mlp.up_proj.weight": (11008, 4096),
+        "model.layers.0.input_layernorm.weight": (4096,),
+        "lm_head.weight": (128256, 4096),
+    }
 
-    filtered = filter_weight_names(names, DEFAULT_LLAMA_MODULE_REGEXES)
+    filtered = filter_weight_names(weight_shapes, DEFAULT_LLAMA_MODULE_REGEXES)
 
     assert filtered == [
         "model.layers.0.mlp.up_proj.weight",
         "model.layers.0.self_attn.k_proj.weight",
         "model.layers.0.self_attn.q_proj.weight",
+    ]
+
+
+def test_filter_weight_names_without_regex_returns_all_2d_weights():
+    weight_shapes = {
+        "classifier.weight": (1000, 768),
+        "classifier.bias": (1000,),
+        "vit.embeddings.patch_embeddings.projection.weight": (768, 3, 16, 16),
+        "vit.encoder.layer.0.attention.attention.query.weight": (768, 768),
+        "vit.encoder.layer.0.output.dense.weight": (768, 3072),
+    }
+
+    filtered = filter_weight_names(weight_shapes)
+
+    assert filtered == [
+        "classifier.weight",
+        "vit.encoder.layer.0.attention.attention.query.weight",
+        "vit.encoder.layer.0.output.dense.weight",
     ]
 
 
@@ -175,6 +226,42 @@ def test_analyze_model_on_tiny_full_checkpoint(tmp_path: Path):
     assert report.tuned_type == "full"
     assert report.total_intruders == 0
     assert report.num_matrices == 1
+    assert report.skipped_matrices == 0
+    assert report.results[0].weight_name == weight_name
+
+
+def test_analyze_model_on_tiny_vit_like_checkpoint_without_regex(tmp_path: Path):
+    base_dir = tmp_path / "base"
+    base_dir.mkdir()
+    weight_name = "vit.encoder.layer.0.attention.attention.query.weight"
+    base_tensor = torch.diag(torch.tensor([5.0, 3.0]))
+    save_file(
+        {
+            weight_name: base_tensor,
+            "vit.encoder.layer.0.layernorm_before.weight": torch.ones(2),
+        },
+        str(base_dir / "model.safetensors"),
+    )
+
+    checkpoint_dir = tmp_path / "run-1" / "checkpoint-10"
+    checkpoint_dir.mkdir(parents=True)
+    tuned_tensor = torch.diag(torch.tensor([5.1, 2.9]))
+    save_file({weight_name: tuned_tensor}, str(checkpoint_dir / "model.safetensors"))
+
+    report = analyze_model(
+        AnalysisConfig(
+            base_model_path=base_dir,
+            tuned_path=checkpoint_dir.parent,
+            epsilon=0.9,
+            k=2,
+            device="cpu",
+        )
+    )
+
+    assert report.tuned_type == "full"
+    assert report.total_intruders == 0
+    assert report.num_matrices == 1
+    assert report.skipped_matrices == 0
     assert report.results[0].weight_name == weight_name
 
 
@@ -217,3 +304,34 @@ def test_analyze_model_emits_progress_events(tmp_path: Path):
         "matrix_complete",
         "complete",
     ]
+
+
+def test_analyze_model_skips_shape_mismatch(tmp_path: Path):
+    base_dir = tmp_path / "base"
+    base_dir.mkdir()
+    save_file({"classifier.weight": torch.zeros(1000, 768)}, str(base_dir / "model.safetensors"))
+
+    checkpoint_dir = tmp_path / "run-1" / "checkpoint-10"
+    checkpoint_dir.mkdir(parents=True)
+    save_file({"classifier.weight": torch.zeros(10, 768)}, str(checkpoint_dir / "model.safetensors"))
+
+    phases = []
+
+    def on_progress(event: dict) -> None:
+        phases.append(event["phase"])
+
+    report = analyze_model(
+        AnalysisConfig(
+            base_model_path=base_dir,
+            tuned_path=checkpoint_dir.parent,
+            epsilon=0.9,
+            k=2,
+            device="cpu",
+        ),
+        progress_callback=on_progress,
+    )
+
+    assert report.num_matrices == 0
+    assert report.skipped_matrices == 1
+    assert report.skipped_weights == ["classifier.weight"]
+    assert "matrix_skipped" in phases

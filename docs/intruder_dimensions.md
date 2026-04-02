@@ -37,17 +37,24 @@ If a run directory is provided, the script resolves the latest checkpoint by ste
 
 ## Default module scope
 
-By default the script analyzes the standard LLaMA projection weights:
+By default the script analyzes all 2D `.weight` tensors in the base checkpoint.
 
-- `self_attn.q_proj`
-- `self_attn.k_proj`
-- `self_attn.v_proj`
-- `self_attn.o_proj`
-- `mlp.gate_proj`
-- `mlp.up_proj`
-- `mlp.down_proj`
+That makes the script work across model families such as:
 
-This keeps the first version practical for LLaMA-family checkpoints while staying close to the paper's method.
+- LLaMA and Mistral
+- Qwen
+- RoBERTa and other encoder models
+- ViT and other vision backbones
+
+If you want to narrow the analysis to a subset of modules, pass one or more `--module-regex` filters. For example, to focus on the standard LLaMA projection weights:
+
+```bash
+uv run python scripts/find_intruder_dimensions.py \
+  --base-model checkpoints/meta-llama/Meta-Llama-3-8B \
+  --tuned outputs/llama3-lora-hpo/llama3_lora_r128/dainty-sweep-1/run-xq8s45mw \
+  --module-regex 'model\.layers\.\d+\.self_attn\.(q_proj|k_proj|v_proj|o_proj)\.weight$' \
+  --module-regex 'model\.layers\.\d+\.mlp\.(gate_proj|up_proj|down_proj)\.weight$'
+```
 
 ## CLI usage
 
@@ -111,8 +118,11 @@ If `--output` is provided, it also writes a JSON report with:
 
 - top-level metadata for the run
 - total intruder count across analyzed matrices
+- number of skipped matrices
 - one result object per matrix
 - per-matrix `max_abs_cosines` and `intruder_indices`
+
+Matrices whose tuned shape no longer matches the base shape are skipped. This is common for task-specific heads such as classification layers where `num_labels` changes during fine-tuning.
 
 ## Python API
 
@@ -128,4 +138,4 @@ Main entry points:
 - Exact SVD on LLaMA 3 8B projection matrices is expensive, especially for MLP projections.
 - Full fine-tuning checkpoints can be much slower to read than LoRA adapter checkpoints because they store dense model weights.
 - `--device auto` prefers CUDA when available, but the implementation falls back to CPU if CUDA SVD fails at runtime.
-- The script currently analyzes selected LLaMA projection weights by default, not every 2D parameter matrix in the model.
+- By default the script analyzes all 2D `.weight` tensors, which is broader and slower than restricting the scope with `--module-regex`.

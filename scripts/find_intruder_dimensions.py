@@ -10,7 +10,6 @@ from pathlib import Path
 from tqdm.auto import tqdm
 
 from lora_finetune.intruder_dimensions import (
-    DEFAULT_LLAMA_MODULE_REGEXES,
     AnalysisConfig,
     analyze_model,
 )
@@ -52,13 +51,12 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    module_regexes = args.module_regex or list(DEFAULT_LLAMA_MODULE_REGEXES)
     config = AnalysisConfig(
         base_model_path=Path(args.base_model),
         tuned_path=Path(args.tuned),
         epsilon=args.epsilon,
         k=args.k,
-        module_regexes=module_regexes,
+        module_regexes=args.module_regex,
         device=args.device,
         limit=args.limit,
     )
@@ -101,6 +99,10 @@ def main() -> int:
 
         if phase == "matrix_complete":
             progress_bar.update(1)
+            return
+
+        if phase == "matrix_skipped":
+            progress_bar.update(1)
 
     report = analyze_model(config, progress_callback=on_progress)
     report_dict = report.to_dict()
@@ -113,6 +115,7 @@ def main() -> int:
     print(f"Resolved checkpoint: {report.resolved_checkpoint_path}")
     print(f"Tuned type: {report.tuned_type}")
     print(f"Matrices analyzed: {report.num_matrices}")
+    print(f"Matrices skipped: {report.skipped_matrices}")
     print(f"Total intruders: {report.total_intruders}")
     print("Top matrices by intruder count:")
     top_results = sorted(
