@@ -12,6 +12,7 @@ from .utils import (
     console,
     get_method_display_name,
     get_warning_handler,
+    is_main_process,
     set_seed,
     setup_logging,
     suppress_warnings,
@@ -217,12 +218,13 @@ def main() -> None:
     set_seed(config.training.seed)
     hf_set_seed(config.training.seed)
 
-    console.print(
-        _get_train_support().build_configuration_panel(
-            config,
-            get_method_display_name,
+    if is_main_process():
+        console.print(
+            _get_train_support().build_configuration_panel(
+                config,
+                get_method_display_name,
+            )
         )
-    )
 
     if config.model.model_type == "vision":
         train_vision(config)

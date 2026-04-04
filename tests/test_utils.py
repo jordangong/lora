@@ -23,6 +23,8 @@ from lora_finetune.utils import (
     get_device,
     get_gpu_memory_usage,
     get_model_size,
+    is_main_process,
+    print_model_size,
     set_seed,
     setup_logging,
     suppress_warnings,
@@ -178,6 +180,24 @@ class TestGetDevice:
         assert device.type in ["cuda", "mps", "cpu"]
 
 
+class TestIsMainProcess:
+    def test_defaults_to_main_process_without_rank_env(self, monkeypatch):
+        monkeypatch.delenv("RANK", raising=False)
+        monkeypatch.delenv("LOCAL_RANK", raising=False)
+
+        assert is_main_process() is True
+
+    def test_uses_rank_environment_when_present(self, monkeypatch):
+        monkeypatch.setenv("RANK", "1")
+
+        assert is_main_process() is False
+
+    def test_prefers_should_log_from_training_args(self, monkeypatch):
+        monkeypatch.setenv("RANK", "1")
+
+        assert is_main_process(type("Args", (), {"should_log": True})()) is True
+
+
 class TestGetGpuMemoryUsage:
     """Tests for get_gpu_memory_usage function."""
 
@@ -232,6 +252,16 @@ class TestGetModelSize:
         assert stats["total_params"] == 67
         assert stats["trainable_params"] == 12
         assert stats["trainable_percent"] < 100.0
+
+    def test_print_model_size_skips_non_main_process(self, monkeypatch):
+        printed = []
+
+        monkeypatch.setenv("RANK", "1")
+        monkeypatch.setattr("lora_finetune.utils.console.print", lambda message: printed.append(message))
+
+        print_model_size(torch.nn.Linear(2, 2))
+
+        assert printed == []
 
 
 class TestCountParameters:

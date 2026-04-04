@@ -1640,6 +1640,42 @@ class TestRichProgressCallback:
         assert callback.progress.removed_tasks == [9]
         assert printed == ["  [bold]Eval[/bold] @ epoch 2.00: [green]loss[/green]=0.8464"]
 
+    def test_on_train_begin_skips_progress_setup_for_non_main_process(self):
+        callback = RichProgressCallback()
+
+        class FakeArgs:
+            should_log = False
+            num_train_epochs = 1
+
+        class FakeState:
+            max_steps = 2
+
+        result = callback.on_train_begin(FakeArgs(), FakeState(), control="control")
+
+        assert result == "control"
+        assert callback.progress is None
+        assert callback.train_task is None
+
+
+class TestSaveModelProcessZero:
+    def test_save_model_skips_non_main_process(self, tmp_path):
+        output_dir = tmp_path / "saved-model"
+
+        class DummyTrainer:
+            def __init__(self):
+                self.args = SimpleNamespace(output_dir=str(output_dir))
+                self.model = object()
+                self.processing_class = None
+
+            def is_world_process_zero(self):
+                return False
+
+        trainer = DummyTrainer()
+
+        trainer_module.LoraTrainer.save_model(trainer)
+
+        assert not output_dir.exists()
+
 
 class TestCreateTrainer:
     """Tests for create_trainer function."""

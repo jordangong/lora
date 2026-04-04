@@ -1393,3 +1393,33 @@ class TestMainBootstrap:
         train_module.main()
 
         assert "train_text_classification" in events
+
+    def test_main_skips_configuration_panel_for_non_main_process(self, monkeypatch):
+        events = []
+        config = Config(
+            model=ModelConfig(model_type="causal_lm", use_unsloth=False),
+            training=TrainingConfig(output_dir="./test-output", eval_strategy="no"),
+        )
+
+        monkeypatch.setattr(train_module, "parse_args", lambda: argparse.Namespace(verbose=False))
+        monkeypatch.setattr(train_module, "build_config", lambda args: config)
+        monkeypatch.setattr(train_module, "suppress_warnings", lambda: events.append("suppress"))
+        monkeypatch.setattr(train_module, "is_main_process", lambda: False)
+
+        def fake_ensure_runtime_imports():
+            train_module.hf_set_seed = lambda seed: events.append(f"hf_set_seed:{seed}")
+
+        monkeypatch.setattr(train_module, "_ensure_runtime_imports", fake_ensure_runtime_imports)
+        monkeypatch.setattr(train_module, "setup_logging", lambda level: None)
+        monkeypatch.setattr(train_module, "set_seed", lambda seed: None)
+        monkeypatch.setattr(train_module, "train_llm", lambda cfg: events.append("train_llm"))
+        monkeypatch.setattr(
+            train_module.console,
+            "print",
+            lambda *args, **kwargs: events.append("print_config"),
+        )
+
+        train_module.main()
+
+        assert "train_llm" in events
+        assert "print_config" not in events

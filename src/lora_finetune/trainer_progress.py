@@ -12,7 +12,7 @@ from rich.progress import (
 from rich.table import Table
 from transformers.trainer_callback import TrainerCallback
 
-from .utils import console
+from .utils import console, is_main_process
 
 
 class RichProgressCallback(TrainerCallback):
@@ -36,6 +36,8 @@ class RichProgressCallback(TrainerCallback):
 
     def _print_gpu_memory(self):
         """Print GPU memory usage."""
+        if not is_main_process():
+            return
         try:
             import torch
 
@@ -67,6 +69,8 @@ class RichProgressCallback(TrainerCallback):
 
     def on_train_begin(self, args, state, control, model=None, **kwargs):
         """Initialize progress bar at training start."""
+        if not is_main_process(args):
+            return control
         self._print_gpu_memory()
         console.print(Panel("[bold green]Training Started[/bold green]", border_style="green"))
 
@@ -106,6 +110,8 @@ class RichProgressCallback(TrainerCallback):
 
     def on_log(self, args, state, control, logs=None, **kwargs):
         """Display training metrics inline."""
+        if not is_main_process(args):
+            return
         if logs is None or self.in_eval:
             return
 
@@ -144,6 +150,8 @@ class RichProgressCallback(TrainerCallback):
             self.progress.remove_task(self.eval_task)
             self.eval_task = None
 
+        if not is_main_process(args):
+            return
         if metrics is None:
             return
 
@@ -168,6 +176,8 @@ class RichProgressCallback(TrainerCallback):
 
     def _start_eval_progress(self, num_steps: int):
         """Start eval progress bar with known steps."""
+        if not is_main_process():
+            return
         if self.progress and self.eval_task is None:
             self.in_eval = True
             self.eval_task = self.progress.add_task(
@@ -197,6 +207,8 @@ class RichProgressCallback(TrainerCallback):
     def on_train_end(self, args, state, control, **kwargs):
         """Clean up progress bar and show final stats."""
         try:
+            if not is_main_process(args):
+                return control
             table = Table(show_header=False, box=None)
             table.add_column("Metric", style="bold")
             table.add_column("Value", justify="right", style="cyan")

@@ -45,11 +45,45 @@ def capture_stdout():
 
 
 _warning_handler: Optional["RichWarningHandler"] = None
+_RANK_ENV_KEYS = ("RANK", "LOCAL_RANK")
 
 
 def get_warning_handler() -> Optional["RichWarningHandler"]:
     """Return the global RichWarningHandler installed by suppress_warnings()."""
     return _warning_handler
+
+
+def _get_env_int(keys: Sequence[str]) -> Optional[int]:
+    for key in keys:
+        value = os.environ.get(key)
+        if value is None:
+            continue
+        try:
+            return int(value)
+        except ValueError:
+            continue
+    return None
+
+
+def is_main_process(args: Optional[object] = None) -> bool:
+    """Return True when the current process should emit user-facing output."""
+    if args is not None:
+        should_log = getattr(args, "should_log", None)
+        if should_log is not None:
+            return bool(should_log)
+
+        process_index = getattr(args, "process_index", None)
+        if process_index is not None:
+            return process_index == 0
+
+    if torch.distributed.is_available() and torch.distributed.is_initialized():
+        try:
+            return torch.distributed.get_rank() == 0
+        except Exception:
+            pass
+
+    rank = _get_env_int(_RANK_ENV_KEYS)
+    return rank in (None, 0)
 
 
 ANSI_ESCAPE_RE = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
@@ -166,6 +200,8 @@ def _print_warning_message(msg: str, rich_console: Optional[Console] = None) -> 
     """Render warning message with Rich without interpreting message markup."""
     if not msg:
         return
+    if not is_main_process():
+        return
     target_console = rich_console or console
     target_console.print(Text(f"  ⚠ {msg}", style="dim yellow"))
 
@@ -221,6 +257,8 @@ def _install_wandb_rich_terminal_logging(
                 silent=silent,
                 level=level,
             )
+        if not is_main_process():
+            return
 
         try:
             with wandb_term_module._dynamic_text_lock, wandb_term_module._l_above_dynamic_text():
@@ -455,6 +493,8 @@ def get_gpu_memory_usage() -> dict:
 
 def print_gpu_memory_usage() -> None:
     """Print GPU memory usage."""
+    if not is_main_process():
+        return
     stats = get_gpu_memory_usage()
     if not stats:
         return
@@ -508,6 +548,8 @@ def get_model_size(model: torch.nn.Module) -> dict:
 
 def print_model_size(model: torch.nn.Module) -> None:
     """Print model size statistics."""
+    if not is_main_process():
+        return
     stats = get_model_size(model)
 
     table = Table(title="Model Statistics", show_header=False, box=None)

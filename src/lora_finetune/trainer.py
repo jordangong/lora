@@ -774,6 +774,8 @@ class LoraTrainerMixin:
 
     def save_model(self, output_dir: Optional[str] = None, _internal_call: bool = False):
         """Save model, handling PEFT models correctly."""
+        if not self.is_world_process_zero():
+            return
         output_dir = output_dir if output_dir is not None else self.args.output_dir
         os.makedirs(output_dir, exist_ok=True)
 

@@ -1,6 +1,7 @@
 import copy
 import gc
 import os
+from contextlib import nullcontext
 from typing import Any
 
 import torch
@@ -12,6 +13,14 @@ from transformers.trainer_callback import TrainerCallback
 from .config import BenchmarkEvalConfig, Config
 from .output_paths import ensure_hpo_sweep_output_dir
 from .trainer_hpo import _iter_hpo_parameter_names, build_hpo_compute_objective
+from .utils import is_main_process
+
+
+def _trainer_is_world_process_zero(trainer) -> bool:
+    is_world_process_zero = getattr(trainer, "is_world_process_zero", None)
+    if callable(is_world_process_zero):
+        return bool(is_world_process_zero())
+    return True
 
 
 def _resolve_best_run_hpo_parameters(
@@ -43,6 +52,8 @@ def _log_metrics_to_wandb(
     metrics: dict[str, Any], namespace: str, global_step: int | None = None
 ) -> None:
     if not metrics:
+        return
+    if not is_main_process():
         return
 
     prefixed_metrics = {f"{namespace}/{key}": value for key, value in metrics.items()}
@@ -106,6 +117,8 @@ def run_benchmark_eval(
     eval_config: BenchmarkEvalConfig,
     trainer=None,
 ) -> None:
+    if not is_main_process():
+        return
     module._ensure_runtime_imports()
     module.console.print(Panel("[bold blue]Running Benchmark Evaluation[/bold blue]"))
 
@@ -160,7 +173,12 @@ def run_final_trainer_evaluation(console, trainer):
     else:
         wandb_callback = _pop_wandb_callback(trainer)
         try:
-            with Status("[bold blue]Running final evaluation...", console=console):
+            status_context = (
+                Status("[bold blue]Running final evaluation...", console=console)
+                if is_main_process(getattr(trainer, "args", None))
+                else nullcontext()
+            )
+            with status_context:
                 metrics = evaluate(metric_key_prefix="final_eval")
         finally:
             if wandb_callback is not None:
@@ -325,6 +343,8 @@ def run_trainer_hpo(
 
 
 def display_hpo_best_run(console, best_run: Any) -> None:
+    if not is_main_process():
+        return
     console.print(Panel("[bold blue]Hyperparameter Search Complete[/bold blue]"))
     table = Table(title="Best Hyperparameter Run")
     table.add_column("Field", style="cyan")
@@ -343,6 +363,8 @@ def display_hpo_best_run(console, best_run: Any) -> None:
 
 
 def save_hpo_best_config(module, config: Config, best_run: Any) -> None:
+    if not is_main_process():
+        return
     module._ensure_runtime_imports()
     hyperparameters = getattr(best_run, "hyperparameters", {}) or {}
     if not hyperparameters:
@@ -373,7 +395,10 @@ def run_with_status(get_warning_handler, console, status_message: str, fn):
     wh = get_warning_handler()
     if wh is not None:
         wh.start_buffering()
-    with Status(status_message, console=console):
+    if is_main_process():
+        with Status(status_message, console=console):
+            result = fn()
+    else:
         result = fn()
     if wh is not None:
         wh.flush_buffered()
@@ -435,6 +460,8 @@ def run_hpo_if_enabled(
 
 
 def save_and_maybe_push_model(console, trainer, config: Config) -> None:
+    if not _trainer_is_world_process_zero(trainer):
+        return
     with Status("[bold blue]Saving model...", console=console):
         trainer.save_model()
 
