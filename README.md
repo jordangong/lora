@@ -595,6 +595,36 @@ uv run accelerate launch --config_file configs/fsdp_config.yaml \
 
 You can also set `training.fsdp` and `training.fsdp_config` directly in YAML or via CLI.
 
+### DDP with Unsloth
+
+Unsloth causal LM training can run on multiple GPUs with Hugging Face Accelerate. For
+distributed launches, the loader pins each rank to its local GPU before the Unsloth model is
+created, which is required for multi-GPU 4-bit and 8-bit runs.
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1 uv run accelerate launch \
+  --multi_gpu \
+  --num_processes 2 \
+  -m lora_finetune.train \
+  --config configs/llama3_lora.yaml \
+  --use_unsloth \
+  --load_in_4bit \
+  --report_to none
+```
+
+`training.ddp_find_unused_parameters` should stay `false` for this path.
+
+If you prefer plain PyTorch launchers, the same setup also works with:
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1 uv run torchrun --standalone --nproc_per_node=2 \
+  -m lora_finetune.train \
+  --config configs/llama3_lora.yaml \
+  --use_unsloth \
+  --load_in_4bit \
+  --report_to none
+```
+
 ## Testing
 
 ```bash

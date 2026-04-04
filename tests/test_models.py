@@ -218,6 +218,95 @@ class TestUnslothIntegration:
         assert model.config.pad_token_id == 1
         assert model.generation_config.pad_token_id == 1
 
+    def test_load_model_and_tokenizer_uses_rank_local_device_map_for_unsloth_ddp(
+        self, monkeypatch
+    ):
+        """Test Unsloth model loading pins each distributed rank to its local device."""
+        captured = {"set_device_calls": []}
+
+        class FakeConfig:
+            pad_token_id = None
+
+        class FakeGenerationConfig:
+            pad_token_id = None
+
+        class FakeModel:
+            def __init__(self):
+                self.config = FakeConfig()
+                self.generation_config = FakeGenerationConfig()
+
+        class FakeTokenizer:
+            def __init__(self):
+                self.pad_token = "</s>"
+                self.pad_token_id = 7
+                self.eos_token = "</s>"
+                self.eos_token_id = 7
+                self.unk_token = "<unk>"
+                self.unk_token_id = 1
+
+            def save_pretrained(self, path):
+                captured["saved_tokenizer_path"] = path
+
+        class FakeFastLanguageModel:
+            @classmethod
+            def from_pretrained(
+                cls,
+                model_name,
+                max_seq_length=None,
+                dtype=None,
+                load_in_4bit=False,
+                load_in_8bit=False,
+                device_map=None,
+                trust_remote_code=False,
+                tokenizer_name=None,
+                **kwargs,
+            ):
+                captured["kwargs"] = {
+                    "model_name": model_name,
+                    "max_seq_length": max_seq_length,
+                    "dtype": dtype,
+                    "load_in_4bit": load_in_4bit,
+                    "load_in_8bit": load_in_8bit,
+                    "device_map": device_map,
+                    "trust_remote_code": trust_remote_code,
+                    "tokenizer_name": tokenizer_name,
+                }
+                return FakeModel(), FakeTokenizer()
+
+        class FakeAutoTokenizer:
+            @classmethod
+            def from_pretrained(
+                cls,
+                model_name_or_path,
+                trust_remote_code=False,
+                padding_side="right",
+                model_max_length=None,
+            ):
+                return FakeTokenizer()
+
+        monkeypatch.setenv("LOCAL_RANK", "1")
+        monkeypatch.setenv("WORLD_SIZE", "2")
+        monkeypatch.setattr(base_module, "FastLanguageModel", FakeFastLanguageModel)
+        monkeypatch.setattr(base_module, "AutoTokenizer", FakeAutoTokenizer)
+        monkeypatch.setattr(base_module.torch.cuda, "is_available", lambda: True)
+        monkeypatch.setattr(
+            base_module.torch.cuda,
+            "set_device",
+            lambda device: captured["set_device_calls"].append(device),
+        )
+
+        load_model_and_tokenizer(
+            ModelConfig(
+                model_type="causal_lm",
+                use_unsloth=True,
+                load_in_4bit=True,
+            ),
+            max_seq_length=2048,
+        )
+
+        assert captured["kwargs"]["device_map"] == {"": "cuda:1"}
+        assert captured["set_device_calls"] == [1]
+
     def test_load_model_and_tokenizer_uses_local_override_for_unsloth_tokenizer(
         self, monkeypatch, tmp_path
     ):

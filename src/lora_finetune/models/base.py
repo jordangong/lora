@@ -2,6 +2,7 @@
 
 import inspect
 import logging
+import os
 import tempfile
 from pathlib import Path
 from typing import Any, Optional, Tuple, Union
@@ -53,6 +54,8 @@ MODEL_TYPE_TO_TASK_TYPE = {
 }
 
 UNSLOTH_SUPPORTED_METHODS = {"lora", "dora", "loraplus", "full"}
+_LOCAL_RANK_ENV_KEYS = ("LOCAL_RANK", "RANK")
+_WORLD_SIZE_ENV_KEYS = ("WORLD_SIZE",)
 
 
 def _get_fast_language_model():
@@ -99,6 +102,52 @@ def _filter_supported_kwargs(func: Any, kwargs: dict[str, Any]) -> dict[str, Any
     if any(parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in parameters.values()):
         return kwargs
     return {key: value for key, value in kwargs.items() if key in parameters}
+
+
+def _get_env_int(keys: tuple[str, ...]) -> Optional[int]:
+    for key in keys:
+        value = os.environ.get(key)
+        if value is None:
+            continue
+        try:
+            return int(value)
+        except ValueError:
+            continue
+    return None
+
+
+def _infer_distributed_local_rank() -> tuple[Optional[int], Optional[int]]:
+    if torch.distributed.is_available() and torch.distributed.is_initialized():
+        try:
+            return torch.distributed.get_rank(), torch.distributed.get_world_size()
+        except Exception:
+            pass
+    return _get_env_int(_LOCAL_RANK_ENV_KEYS), _get_env_int(_WORLD_SIZE_ENV_KEYS)
+
+
+def _get_unsloth_device_map() -> Optional[dict[str, str]]:
+    local_rank, world_size = _infer_distributed_local_rank()
+    distributed = (world_size or 1) > 1 or (local_rank is not None and local_rank > 0)
+    if not distributed:
+        return None
+
+    if torch.cuda.is_available():
+        device_type = "cuda"
+        try:
+            torch.cuda.set_device(0 if local_rank is None else local_rank)
+        except Exception:
+            pass
+    elif hasattr(torch, "xpu") and torch.xpu.is_available():
+        device_type = "xpu"
+        try:
+            torch.xpu.set_device(0 if local_rank is None else local_rank)
+        except Exception:
+            pass
+    else:
+        return None
+
+    resolved_local_rank = 0 if local_rank is None else local_rank
+    return {"": f"{device_type}:{resolved_local_rank}"}
 
 
 def _set_tokenizer_padding(tokenizer: Any) -> bool:
@@ -213,7 +262,7 @@ def _load_unsloth_model_and_tokenizer(
         "dtype": torch_dtype,
         "load_in_4bit": config.load_in_4bit,
         "load_in_8bit": config.load_in_8bit,
-        "device_map": None,
+        "device_map": _get_unsloth_device_map(),
         "trust_remote_code": config.trust_remote_code,
     }
     if torch_dtype == "auto":
